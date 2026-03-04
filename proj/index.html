@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Advanced DFS / BFS Visualizer</title>
+
+<link rel="stylesheet" href="css/styles.css">
+</head>
+
+<body>
+
+<h2>Graph DFS / BFS Visualizer</h2>
+
+<select id="mode" onchange="switchMode()">
+  <option value="visual">Visual Builder</option>
+  <option value="list">Adjacency List</option>
+  <option value="matrix">Adjacency Matrix</option>
+</select>
+
+<label>
+  <input type="checkbox" id="directed"> Directed
+</label>
+
+<div id="visualMode">
+  <button id="addNodeBtn">Add Vertex</button>
+  <button id="clearBtn">Clear</button>
+  <p>Click two vertices to create an edge</p>
+</div>
+
+<div id="listMode" style="display:none">
+  <textarea id="listInput" placeholder="A:B,C&#10;B:A&#10;C:A"></textarea>
+</div>
+
+<div id="matrixMode" style="display:none">
+  <textarea id="matrixInput" placeholder="0,1,1&#10;1,0,0&#10;1,0,0"></textarea>
+</div>
+
+<br>
+Start Node:
+<input id="startNode" style="width:50px" />
+
+<br><br>
+
+<button id="bfsBtn">Start BFS</button>
+<button id="dfsBtn">Start DFS</button>
+<button id="nextBtn">Next</button>
+<button id="runAllBtn">Run to End</button>
+<button id="undoBtn">Undo</button>
+<button id="resetBtn">Reset</button>
+
+<button id="exportListBtn">Export List</button>
+<button id="exportMatrixBtn">Export Matrix</button>
+
+<p id="status"></p>
+
+<div id="canvas">
+  <svg id="edges">
+    <defs>
+      <marker id="arrowhead"
+              markerWidth="10"
+              markerHeight="7"
+              refX="10"
+              refY="3.5"
+              orient="auto"
+              markerUnits="strokeWidth">
+        <polygon points="0 0, 10 3.5, 0 7" fill="black"></polygon>
+      </marker>
+    </defs>
+  </svg>
+</div>
+
+<details style="margin-top:20px;">
+  <summary><strong>Help</strong></summary>
+  <ul>
+    <li>Add vertices and connect them by clicking two vertices.</li>
+    <li>Toggle Directed to create directed edges.</li>
+    <li>Use adjacency list or matrix to import graphs.</li>
+    <li>Orange = current node, Green = visited.</li>
+  </ul>
+</details>
+
+<script src="js/app.js"></script>
+
+</body>
+</html>

@@ -15,7 +15,6 @@ const STEP = 70;
 
 // cache DOM elements explicitly
 const modeSel      = document.getElementById("mode");
-const directedChk  = document.getElementById("directed");
 const visualMode   = document.getElementById("visualMode");
 const listMode     = document.getElementById("listMode");
 const matrixMode   = document.getElementById("matrixMode");
@@ -36,8 +35,12 @@ const undoBtn          = document.getElementById("undoBtn");
 const exportListBtn    = document.getElementById("exportListBtn");
 const exportMatrixBtn  = document.getElementById("exportMatrixBtn");
 const resetBtn         = document.getElementById("resetBtn");
+const removeVertexBtn = document.getElementById("removeVertexBtn");
+const removeEdgeBtn = document.getElementById("removeEdgeBtn");
 
-// wire up buttons
+const vertexList = document.getElementById("vertexList");
+const edgeList = document.getElementById("edgeList");
+
 addNodeBtn.onclick      = () => addNode();
 clearBtn.onclick        = () => clearGraph();
 bfsBtn.onclick          = () => startAlgo("BFS");
@@ -48,6 +51,8 @@ undoBtn.onclick         = () => stepBack();
 exportListBtn.onclick   = () => exportList();
 exportMatrixBtn.onclick = () => exportMatrix();
 resetBtn.onclick        = () => fullReset();
+removeVertexBtn.onclick = () => removeVertex();
+removeEdgeBtn.onclick = () => removeEdge();
 
 function switchMode() {
   visualMode.style.display = "none";
@@ -79,6 +84,7 @@ function addNode(nameOpt) {
   nodes[name] = div;
   if (!graph[name]) graph[name] = [];
   if (!startNodeInp.value) startNodeInp.value = name;
+  updateLists();
 }
 
 // Clear previous selection highlight
@@ -114,16 +120,15 @@ function selectNode(name) {
 
     graph[selected].push({ to: name, w: weight });
 
-    if (!directedChk.checked) {
-      if (!graph[name]) graph[name] = [];
-      graph[name].push({ to: selected, w: weight });
-    }
+  if (!graph[name]) graph[name] = [];
+  graph[name].push({ to: selected, w: weight });
 
     selected = null;
     clearSelectionHighlight();
 
     drawEdges();
   }
+  updateLists();
 }
 
 function drawEdges() {
@@ -157,10 +162,8 @@ function drawEdges() {
       line.setAttribute("stroke", "black");
       line.setAttribute("stroke-width", "2");
 
-      if (directedChk.checked) {
-        line.setAttribute("marker-end", "url(#arrowhead)");
-      }
-
+      line.setAttribute("stroke", "black");
+      line.setAttribute("stroke-width", "2");
       edgesSvg.appendChild(line);
 
       let text = document.createElementNS("http://www.w3.org/2000/svg","text");
@@ -180,7 +183,6 @@ function drawEdges() {
 
 }
 
-directedChk.addEventListener("change", drawEdges);
 
 function makeDraggable(el) {
 
@@ -280,6 +282,64 @@ matrixInput.addEventListener("change", parseMatrix);
 listInput.addEventListener("blur", parseList);
 matrixInput.addEventListener("blur", parseMatrix);
 
+function updateLists() {
+
+  vertexList.innerHTML = "";
+  edgeList.innerHTML = "";
+
+  Object.keys(graph).forEach(v => {
+
+    let opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v;
+
+    vertexList.appendChild(opt);
+
+  });
+
+  for (let u in graph) {
+
+    (graph[u] || []).forEach(e => {
+
+      if (u < e.to) {
+
+        let opt = document.createElement("option");
+        opt.value = `${u},${e.to}`;
+        opt.textContent = `${u} - ${e.to}`;
+
+        edgeList.appendChild(opt);
+
+      }
+
+    });
+
+  }
+
+}
+
+function removeVertex() {
+
+  const v = vertexList.value;
+
+  if (!v) return;
+
+  delete graph[v];
+
+  Object.keys(graph).forEach(u => {
+    graph[u] = graph[u].filter(e => e.to !== v);
+  });
+
+  if (nodes[v]) {
+    nodes[v].remove();
+    delete nodes[v];
+  }
+
+  drawEdges();
+  updateLists();
+
+}
+
+
 function rebuildNodesFromGraph() {
 
   Object.values(nodes).forEach(n => n.remove());
@@ -350,11 +410,14 @@ function stepForward() {
 
     visited.add(current);
 
-    (graph[current] || []).forEach(e => {
-      if (!visited.has(e.to) && !structure.includes(e.to)) {
-        structure.push(e.to);
-      }
-    });
+    (graph[current] || [])
+  .slice()
+  .sort((a, b) => a.to.localeCompare(b.to))
+  .forEach(e => {
+    if (!visited.has(e.to) && !structure.includes(e.to)) {
+      structure.push(e.to);
+    }
+  });
 
   }
 
@@ -387,13 +450,14 @@ function runToEnd() {
 
       visited.add(current);
 
-      (graph[current] || []).forEach(e => {
-
-        if (!visited.has(e.to) && !structure.includes(e.to)) {
-          structure.push(e.to);
-        }
-
-      });
+      (graph[current] || [])
+  .slice()
+  .sort((a, b) => a.to.localeCompare(b.to))
+  .forEach(e => {
+    if (!visited.has(e.to) && !structure.includes(e.to)) {
+      structure.push(e.to);
+    }
+  });
 
     }
 
@@ -448,7 +512,12 @@ function update() {
 
 function checkFinished() {
 
-  if (structure.length === 0 && algorithm) {
+  if (!algorithm) return;
+
+  // check if any vertex is still unvisited
+  const remaining = Object.keys(graph).some(v => !visited.has(v));
+
+  if (!remaining && structure.length === 0) {
 
     const order = Array.from(visited).join(" -> ");
 
@@ -523,7 +592,7 @@ function clearGraph() {
   selected = null;
 
   clearSelectionHighlight();
-
+  updateLists();
 }
 
 function fullReset() {
@@ -540,5 +609,21 @@ function fullReset() {
   modeSel.value = "visual";
 
   switchMode();
+
+}
+
+function removeEdge() {
+
+  const val = edgeList.value;
+
+  if (!val) return;
+
+  const [u, v] = val.split(",");
+
+  graph[u] = graph[u].filter(e => e.to !== v);
+  graph[v] = graph[v].filter(e => e.to !== u);
+
+  drawEdges();
+  updateLists();
 
 }

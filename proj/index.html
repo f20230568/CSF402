@@ -17,9 +17,7 @@
   <option value="matrix">Adjacency Matrix</option>
 </select>
 
-<label>
-  <input type="checkbox" id="directed"> Directed
-</label>
+
 
 <div id="visualMode">
   <button id="addNodeBtn">Add Vertex</button>
@@ -45,11 +43,17 @@ Start Node:
 <button id="dfsBtn">Start DFS</button>
 <button id="nextBtn">Next</button>
 <button id="runAllBtn">Run to End</button>
-<button id="undoBtn">Undo</button>
+<button id="undoBtn">Undo Previous Step</button>
 <button id="resetBtn">Reset</button>
 
 <button id="exportListBtn">Export List</button>
 <button id="exportMatrixBtn">Export Matrix</button>
+
+<button id="removeVertexBtn">Remove Vertex</button>
+<select id="vertexList"></select>
+
+<button id="removeEdgeBtn">Remove Edge</button>
+<select id="edgeList"></select> 
 
 <p id="status"></p>
 

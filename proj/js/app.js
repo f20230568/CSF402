@@ -560,35 +560,29 @@ function clearGraph() {
 
   graph = {};
 
+  canvasDiv.querySelectorAll(".node").forEach(n => n.remove());
+
   nodes = {};
 
   nodeIndex = 0;
-
   gridX = 20;
   gridY = 20;
 
   edgesSvg.innerHTML = "";
 
-  canvasDiv
-    .querySelectorAll(".node")
-    .forEach(n => n.remove());
+  visited.clear();
+  structure = [];
+  history = [];
+  current = null;
+  selected = null;
 
   statusP.textContent = "";
 
-  visited.clear();
-
-  structure = [];
-
-  current = null;
-
-  history = [];
-
-  selected = null;
-
   clearSelectionHighlight();
-  updateLists();
-}
 
+  updateLists();
+
+}
 function fullReset() {
 
   clearGraph();

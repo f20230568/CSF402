@@ -9,11 +9,9 @@ let current = null;
 let selected = null;
 let nodeIndex = 0;
 
-// grid placement to prevent overlap
 let gridX = 20, gridY = 20;
 const STEP = 70;
 
-// cache DOM elements explicitly
 const modeSel      = document.getElementById("mode");
 const visualMode   = document.getElementById("visualMode");
 const listMode     = document.getElementById("listMode");
@@ -65,7 +63,6 @@ function switchMode() {
   else if (m === "matrix") matrixMode.style.display = "block";
 }
 
-// create a node visually and in graph
 function addNode(nameOpt) {
   const name = nameOpt || String.fromCharCode(65 + nodeIndex++);
   let div = document.createElement("div");
@@ -392,12 +389,11 @@ function stepForward() {
 
   if (!structure.length) {
 
-    // find another unvisited node
     const next = Object.keys(graph).find(v => !visited.has(v));
 
-    if (!next) return;   // traversal finished
+    if (!next) return;   
 
-    structure.push(next);  // start DFS/BFS for next component
+    structure.push(next);  
   }
 
   snapshot();
@@ -436,12 +432,11 @@ function runToEnd() {
 
     if (structure.length === 0) {
 
-      // find an unvisited vertex
       const next = Object.keys(graph).find(v => !visited.has(v));
 
-      if (!next) break;  // entire graph done
+      if (!next) break;  
 
-      structure.push(next);  // start DFS on new component
+      structure.push(next);  
     }
 
     current = (algorithm === "BFS") ? structure.shift() : structure.pop();
@@ -514,7 +509,6 @@ function checkFinished() {
 
   if (!algorithm) return;
 
-  // check if any vertex is still unvisited
   const remaining = Object.keys(graph).some(v => !visited.has(v));
 
   if (!remaining && structure.length === 0) {

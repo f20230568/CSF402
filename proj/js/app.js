@@ -330,30 +330,36 @@ function startAlgo(type) {
 
 function stepForward() {
 
-  if (!structure.length) return;
+  if (!structure.length) {
+
+    // find another unvisited node
+    const next = Object.keys(graph).find(v => !visited.has(v));
+
+    if (!next) return;   // traversal finished
+
+    structure.push(next);  // start DFS/BFS for next component
+  }
 
   snapshot();
 
-  current = (algorithm === "BFS") ? structure.shift() : structure.pop();
+  current = (algorithm === "BFS")
+    ? structure.shift()
+    : structure.pop();
 
   if (!visited.has(current)) {
 
     visited.add(current);
 
     (graph[current] || []).forEach(e => {
-
       if (!visited.has(e.to) && !structure.includes(e.to)) {
         structure.push(e.to);
       }
-
     });
 
   }
 
   update();
-
   checkFinished();
-
 }
 
 function runToEnd() {
@@ -363,7 +369,17 @@ function runToEnd() {
     return;
   }
 
-  while (structure.length) {
+  while (true) {
+
+    if (structure.length === 0) {
+
+      // find an unvisited vertex
+      const next = Object.keys(graph).find(v => !visited.has(v));
+
+      if (!next) break;  // entire graph done
+
+      structure.push(next);  // start DFS on new component
+    }
 
     current = (algorithm === "BFS") ? structure.shift() : structure.pop();
 
@@ -384,9 +400,7 @@ function runToEnd() {
   }
 
   update();
-
   checkFinished();
-
 }
 
 function stepBack() {

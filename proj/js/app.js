@@ -12,7 +12,6 @@ let nodeIndex = 0;
 let gridX = 20, gridY = 20;
 const STEP = 70;
 
-// DOM Elements
 const modeSel      = document.getElementById("mode");
 const visualMode   = document.getElementById("visualMode");
 const listMode     = document.getElementById("listMode");
@@ -39,7 +38,9 @@ const removeEdgeBtn    = document.getElementById("removeEdgeBtn");
 const vertexList = document.getElementById("vertexList");
 const edgeList = document.getElementById("edgeList");
 
-// Event Listeners
+const showListGraphBtn = document.getElementById("showListGraphBtn");
+const showMatrixGraphBtn = document.getElementById("showMatrixGraphBtn");
+
 addNodeBtn.onclick      = () => addNode();
 clearBtn.onclick        = () => clearGraph();
 bfsBtn.onclick          = () => startAlgo("BFS");
@@ -51,6 +52,8 @@ exportListBtn.onclick   = () => exportList();
 exportMatrixBtn.onclick = () => exportMatrix();
 removeVertexBtn.onclick = () => removeVertex();
 removeEdgeBtn.onclick   = () => removeEdge();
+showListGraphBtn.onclick = () => buildFromList();
+showMatrixGraphBtn.onclick = () => buildFromMatrix();
 
 function switchMode() {
   visualMode.style.display = "none";
@@ -112,6 +115,37 @@ function selectNode(name) {
     drawEdges();
     updateLists();
   }
+}
+
+function placeNodesGrid(names) {
+
+  const cols = Math.ceil(Math.sqrt(names.length)); // grid width
+  const startX = 40;
+  const startY = 40;
+  const gap = 80;
+
+  names.forEach((name, i) => {
+
+    const row = Math.floor(i / cols);
+    const col = i % cols;
+
+    let div = document.createElement("div");
+    div.className = "node";
+    div.textContent = name;
+
+    div.style.left = (startX + col * gap) + "px";
+    div.style.top  = (startY + row * gap) + "px";
+
+    makeDraggable(div);
+    div.onclick = () => selectNode(name);
+
+    canvasDiv.appendChild(div);
+
+    nodes[name] = div;
+    if (!graph[name]) graph[name] = [];
+  });
+
+  nodeIndex = names.length;
 }
 
 function drawEdges() {
@@ -284,7 +318,7 @@ function runToEnd() {
   if (!algorithm) return alert("Select BFS or DFS first");
   while (visited.size < Object.keys(graph).length || structure.length > 0) {
     stepForward();
-    // Break loop if no progress can be made
+
     if (!structure.length && !Object.keys(graph).some(v => !visited.has(v))) break;
   }
 }
@@ -332,7 +366,7 @@ function exportMatrix() {
   alert(out);
 }
 
-function clearGraph() {
+/*function clearGraph() {
   graph = {};
   canvasDiv.querySelectorAll(".node").forEach(n => n.remove());
   nodes = {};
@@ -340,5 +374,109 @@ function clearGraph() {
   gridX = 20; gridY = 20;
   edgesSvg.innerHTML = "";
   statusP.textContent = "";
+  updateLists();
+}*/
+
+function clearGraph() {
+
+  graph = {};
+  nodes = {};
+  edges = [];
+
+  visited.clear();
+  structure = [];
+  history = [];
+  algorithm = "";
+  current = null;
+  selected = null;
+
+  nodeIndex = 0;
+  gridX = 20;
+  gridY = 20;
+
+  canvasDiv.querySelectorAll(".node").forEach(n => n.remove());
+
+  edgesSvg.innerHTML = "";
+
+  vertexList.innerHTML = "";
+  edgeList.innerHTML = "";
+  statusP.textContent = "";
+  startNodeInp.value = "";
+
+}
+
+function buildFromList() {
+
+  clearGraph();
+
+  let lines = listInput.value.trim().split("\n");
+  let names = [];
+
+  lines.forEach(line => {
+    let [node] = line.split(":");
+    node = node.trim().toUpperCase();
+    if (!names.includes(node)) names.push(node);
+  });
+
+  placeNodesGrid(names);
+
+  lines.forEach(line => {
+
+    let [node, neighbors] = line.split(":");
+    node = node.trim().toUpperCase();
+
+    if (!neighbors) return;
+
+    neighbors.split(",").forEach(n => {
+
+      n = n.trim().toUpperCase();
+
+      if (!graph[node]) graph[node] = [];
+      graph[node].push({to:n,w:1});
+
+      if (!graph[n]) graph[n] = [];
+      graph[n].push({to:node,w:1});
+
+    });
+
+  });
+
+  drawEdges();
+  updateLists();
+}
+
+function buildFromMatrix() {
+
+  clearGraph();
+
+  let rows = matrixInput.value.trim().split("\n");
+  let matrix = rows.map(r => r.split(",").map(Number));
+
+  let size = matrix.length;
+  let labels = [];
+
+  for (let i=0;i<size;i++) {
+    labels.push(String.fromCharCode(65+i));
+  }
+
+  placeNodesGrid(labels);
+
+  for (let i=0;i<size;i++) {
+    for (let j=i+1;j<size;j++) {
+
+      if (matrix[i][j] === 1) {
+
+        let u = labels[i];
+        let v = labels[j];
+
+        graph[u].push({to:v,w:1});
+        graph[v].push({to:u,w:1});
+
+      }
+
+    }
+  }
+
+  drawEdges();
   updateLists();
 }

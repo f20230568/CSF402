@@ -12,6 +12,7 @@ let nodeIndex = 0;
 let gridX = 20, gridY = 20;
 const STEP = 70;
 
+// DOM Elements
 const modeSel      = document.getElementById("mode");
 const visualMode   = document.getElementById("visualMode");
 const listMode     = document.getElementById("listMode");
@@ -32,13 +33,13 @@ const runAllBtn        = document.getElementById("runAllBtn");
 const undoBtn          = document.getElementById("undoBtn");
 const exportListBtn    = document.getElementById("exportListBtn");
 const exportMatrixBtn  = document.getElementById("exportMatrixBtn");
-const resetBtn         = document.getElementById("resetBtn");
-const removeVertexBtn = document.getElementById("removeVertexBtn");
-const removeEdgeBtn = document.getElementById("removeEdgeBtn");
+const removeVertexBtn  = document.getElementById("removeVertexBtn");
+const removeEdgeBtn    = document.getElementById("removeEdgeBtn");
 
 const vertexList = document.getElementById("vertexList");
 const edgeList = document.getElementById("edgeList");
 
+// Event Listeners
 addNodeBtn.onclick      = () => addNode();
 clearBtn.onclick        = () => clearGraph();
 bfsBtn.onclick          = () => startAlgo("BFS");
@@ -48,9 +49,8 @@ runAllBtn.onclick       = () => runToEnd();
 undoBtn.onclick         = () => stepBack();
 exportListBtn.onclick   = () => exportList();
 exportMatrixBtn.onclick = () => exportMatrix();
-resetBtn.onclick        = () => fullReset();
 removeVertexBtn.onclick = () => removeVertex();
-removeEdgeBtn.onclick = () => removeEdge();
+removeEdgeBtn.onclick   = () => removeEdge();
 
 function switchMode() {
   visualMode.style.display = "none";
@@ -84,59 +84,46 @@ function addNode(nameOpt) {
   updateLists();
 }
 
-// Clear previous selection highlight
-function clearSelectionHighlight() {
-  Object.values(nodes).forEach(n => n.classList.remove("selected-node"));
-}
-
-// select two nodes to create edge
 function selectNode(name) {
-
-  clearSelectionHighlight();
+  Object.values(nodes).forEach(n => n.classList.remove("selected-node"));
 
   if (!selected) {
     selected = name;
     if (nodes[name]) nodes[name].classList.add("selected-node");
   } else {
-
     if (selected === name) {
       selected = null;
-      clearSelectionHighlight();
       return;
     }
 
     let weight = prompt("Edge weight?", "1");
-
     if (weight === null) {
       selected = null;
-      clearSelectionHighlight();
       return;
     }
 
     if (!graph[selected]) graph[selected] = [];
-
     graph[selected].push({ to: name, w: weight });
 
-  if (!graph[name]) graph[name] = [];
-  graph[name].push({ to: selected, w: weight });
+    if (!graph[name]) graph[name] = [];
+    graph[name].push({ to: selected, w: weight });
 
     selected = null;
-    clearSelectionHighlight();
-
     drawEdges();
+    updateLists();
   }
-  updateLists();
 }
 
 function drawEdges() {
-
   edgesSvg.innerHTML = "";
+  let seenEdges = new Set();
 
   for (let u in graph) {
-
     (graph[u] || []).forEach(e => {
-
       let v = e.to;
+      let edgeKey = [u, v].sort().join("-");
+      if (seenEdges.has(edgeKey)) return;
+      seenEdges.add(edgeKey);
 
       if (!nodes[u] || !nodes[v]) return;
 
@@ -150,180 +137,58 @@ function drawEdges() {
       let y2 = r2.top  - c.top  + 22;
 
       let line = document.createElementNS("http://www.w3.org/2000/svg","line");
-
       line.setAttribute("x1", x1);
       line.setAttribute("y1", y1);
       line.setAttribute("x2", x2);
       line.setAttribute("y2", y2);
-
-      line.setAttribute("stroke", "black");
-      line.setAttribute("stroke-width", "2");
-
       line.setAttribute("stroke", "black");
       line.setAttribute("stroke-width", "2");
       edgesSvg.appendChild(line);
 
       let text = document.createElementNS("http://www.w3.org/2000/svg","text");
-
       text.setAttribute("x", (x1 + x2) / 2);
       text.setAttribute("y", (y1 + y2) / 2);
-
       text.textContent = e.w;
-
       text.setAttribute("class", "edge-label");
-
       edgesSvg.appendChild(text);
-
     });
-
   }
-
 }
-
-
-function makeDraggable(el) {
-
-  let offsetX, offsetY;
-
-  el.onmousedown = e => {
-
-    offsetX = e.offsetX;
-    offsetY = e.offsetY;
-
-    document.onmousemove = m => {
-
-      const rect = canvasDiv.getBoundingClientRect();
-
-      el.style.left = (m.pageX - rect.left - offsetX) + "px";
-      el.style.top  = (m.pageY - rect.top  - offsetY) + "px";
-
-      drawEdges();
-
-    };
-
-    document.onmouseup = () => {
-      document.onmousemove = null;
-    };
-
-  };
-
-}
-
-function parseList() {
-
-  graph = {};
-
-  listInput.value.trim().split("\n").forEach(l => {
-
-    if (!l.trim()) return;
-
-    let [v, rest] = l.split(":");
-
-    v = v.trim();
-
-    graph[v] = [];
-
-    if (rest) {
-
-      rest.split(",").forEach(n => {
-
-        n = n.trim();
-
-        if (n) graph[v].push({ to: n, w: 1 });
-
-      });
-
-    }
-
-  });
-
-  rebuildNodesFromGraph();
-
-}
-
-function parseMatrix() {
-
-  graph = {};
-
-  const raw = matrixInput.value.trim();
-
-  if (!raw) return;
-
-  let rows = raw.split("\n").map(r => r.split(",").map(x => x.trim()));
-
-  for (let i = 0; i < rows.length; i++) {
-
-    let u = String.fromCharCode(65 + i);
-
-    graph[u] = [];
-
-    for (let j = 0; j < rows[i].length; j++) {
-
-      if (rows[i][j] === "1") {
-
-        graph[u].push({ to: String.fromCharCode(65 + j), w: 1 });
-
-      }
-
-    }
-
-  }
-
-  rebuildNodesFromGraph();
-
-}
-
-listInput.addEventListener("change", parseList);
-matrixInput.addEventListener("change", parseMatrix);
-
-listInput.addEventListener("blur", parseList);
-matrixInput.addEventListener("blur", parseMatrix);
 
 function updateLists() {
-
   vertexList.innerHTML = "";
   edgeList.innerHTML = "";
 
-  Object.keys(graph).forEach(v => {
-
+  Object.keys(graph).sort().forEach(v => {
     let opt = document.createElement("option");
     opt.value = v;
     opt.textContent = v;
-
     vertexList.appendChild(opt);
-
   });
 
+  let seen = new Set();
   for (let u in graph) {
-
     (graph[u] || []).forEach(e => {
-
-      if (u < e.to) {
-
+      let pair = [u, e.to].sort();
+      let key = pair.join(",");
+      if (!seen.has(key)) {
+        seen.add(key);
         let opt = document.createElement("option");
-        opt.value = `${u},${e.to}`;
-        opt.textContent = `${u} - ${e.to}`;
-
+        opt.value = key;
+        opt.textContent = `${pair[0]} - ${pair[1]}`;
         edgeList.appendChild(opt);
-
       }
-
     });
-
   }
-
 }
 
 function removeVertex() {
-
   const v = vertexList.value;
-
   if (!v) return;
 
   delete graph[v];
-
-  Object.keys(graph).forEach(u => {
-    graph[u] = graph[u].filter(e => e.to !== v);
+  Object.keys(graph).forEach(node => {
+    graph[node] = graph[node].filter(edge => edge.to !== v);
   });
 
   if (nodes[v]) {
@@ -331,287 +196,149 @@ function removeVertex() {
     delete nodes[v];
   }
 
+  if (startNodeInp.value === v) {
+    startNodeInp.value = Object.keys(graph)[0] || "";
+  }
+
   drawEdges();
   updateLists();
-
 }
 
+function removeEdge() {
+  const val = edgeList.value;
+  if (!val) return;
 
-function rebuildNodesFromGraph() {
-
-  Object.values(nodes).forEach(n => n.remove());
-
-  nodes = {};
-  nodeIndex = 0;
-
-  gridX = 20;
-  gridY = 20;
-
-  Object.keys(graph).forEach(v => {
-    addNode(v);
-  });
+  const [u, v] = val.split(",");
+  if (graph[u]) graph[u] = graph[u].filter(e => e.to !== v);
+  if (graph[v]) graph[v] = graph[v].filter(e => e.to !== u);
 
   drawEdges();
+  updateLists();
+}
 
+function makeDraggable(el) {
+  let offsetX, offsetY;
+  el.onmousedown = e => {
+    offsetX = e.offsetX;
+    offsetY = e.offsetY;
+    document.onmousemove = m => {
+      const rect = canvasDiv.getBoundingClientRect();
+      el.style.left = (m.pageX - rect.left - offsetX) + "px";
+      el.style.top  = (m.pageY - rect.top  - offsetY) + "px";
+      drawEdges();
+    };
+    document.onmouseup = () => {
+      document.onmousemove = null;
+    };
+  };
 }
 
 function startAlgo(type) {
-
-  if (!startNodeInp.value) {
-    alert("Enter a start node (e.g., A).");
-    return;
-  }
-
-  const s = startNodeInp.value.trim();
-
-  if (!graph[s]) {
-    alert("Start node not found in graph.");
-    return;
-  }
-
+  if (!startNodeInp.value) return alert("Enter start node");
+  const s = startNodeInp.value.trim().toUpperCase();
+  if (!graph[s]) return alert("Node not found");
+  
   history = [];
   visited.clear();
-  structure = [];
-
+  structure = [s];
   current = null;
-
   algorithm = type;
-
-  structure.push(s);
-
   snapshot();
-
   update();
-
 }
 
 function stepForward() {
-
+  // If structure is empty but graph isn't fully explored, pick the next alphabetical node
   if (!structure.length) {
-
-    const next = Object.keys(graph).find(v => !visited.has(v));
-
-    if (!next) return;   
-
-    structure.push(next);  
+    const remaining = Object.keys(graph).sort().find(v => !visited.has(v));
+    if (!remaining) return; 
+    structure.push(remaining);
   }
 
   snapshot();
-
-  current = (algorithm === "BFS")
-    ? structure.shift()
-    : structure.pop();
+  current = (algorithm === "BFS") ? structure.shift() : structure.pop();
 
   if (!visited.has(current)) {
-
     visited.add(current);
+    
+    // Get neighbors and sort them alphabetically
+    let neighbors = (graph[current] || [])
+      .map(e => e.to)
+      .filter(v => !visited.has(v))
+      .sort();
 
-    (graph[current] || [])
-  .slice()
-  .sort((a, b) => a.to.localeCompare(b.to))
-  .forEach(e => {
-    if (!visited.has(e.to) && !structure.includes(e.to)) {
-      structure.push(e.to);
-    }
-  });
+    // DFS needs to push neighbors in reverse alphabetical order so they are popped in correct order
+    if (algorithm === "DFS") neighbors.reverse();
 
+    neighbors.forEach(v => {
+      if (!structure.includes(v)) {
+        structure.push(v);
+      }
+    });
   }
-
   update();
   checkFinished();
 }
 
 function runToEnd() {
-
-  if (!algorithm) {
-    alert("Start BFS or DFS first.");
-    return;
+  if (!algorithm) return alert("Select BFS or DFS first");
+  while (visited.size < Object.keys(graph).length || structure.length > 0) {
+    stepForward();
+    // Break loop if no progress can be made
+    if (!structure.length && !Object.keys(graph).some(v => !visited.has(v))) break;
   }
-
-  while (true) {
-
-    if (structure.length === 0) {
-
-      const next = Object.keys(graph).find(v => !visited.has(v));
-
-      if (!next) break;  
-
-      structure.push(next);  
-    }
-
-    current = (algorithm === "BFS") ? structure.shift() : structure.pop();
-
-    if (!visited.has(current)) {
-
-      visited.add(current);
-
-      (graph[current] || [])
-  .slice()
-  .sort((a, b) => a.to.localeCompare(b.to))
-  .forEach(e => {
-    if (!visited.has(e.to) && !structure.includes(e.to)) {
-      structure.push(e.to);
-    }
-  });
-
-    }
-
-  }
-
-  update();
-  checkFinished();
 }
 
 function stepBack() {
-
   if (!history.length) return;
-
   let s = history.pop();
-
   visited = new Set(s.visited);
-
   structure = [...s.structure];
-
   current = s.current;
-
   update();
-
 }
 
 function snapshot() {
-
-  history.push({
-    visited: [...visited],
-    structure: [...structure],
-    current
+  history.push({ 
+    visited: Array.from(visited), 
+    structure: [...structure], 
+    current 
   });
-
 }
 
 function update() {
-
-  Object.values(nodes).forEach(n =>
-    n.classList.remove("visited","current")
-  );
-
-  visited.forEach(v =>
-    nodes[v]?.classList.add("visited")
-  );
-
+  Object.values(nodes).forEach(n => n.classList.remove("visited","current"));
+  visited.forEach(v => nodes[v]?.classList.add("visited"));
   if (nodes[current]) nodes[current].classList.add("current");
-
-  statusP.innerText =
-    `${algorithm} | Structure: [${structure.join(", ")}]`;
-
+  statusP.innerText = `${algorithm} | Queue/Stack: [${structure.join(", ")}]`;
 }
 
 function checkFinished() {
-
-  if (!algorithm) return;
-
   const remaining = Object.keys(graph).some(v => !visited.has(v));
-
   if (!remaining && structure.length === 0) {
-
-    const order = Array.from(visited).join(" -> ");
-
-    statusP.innerText =
-      `${algorithm} finished. Order: [${order}]`;
-
+    statusP.innerText = `${algorithm} Complete. Full Traversal: [${Array.from(visited).join(" -> ")}]`;
   }
-
 }
 
 function exportList() {
-
   let out = "";
-
-  for (let u in graph) {
-
-    out += `${u}:${(graph[u] || []).map(e => e.to).join(",")}\n`;
-
-  }
-
+  for (let u in graph) out += `${u}:${graph[u].map(e => e.to).join(",")}\n`;
   alert(out);
-
 }
 
 function exportMatrix() {
-
-  let keys = Object.keys(graph);
-
-  let out = "";
-
-  keys.forEach(u => {
-
-    out += keys
-      .map(v =>
-        (graph[u] || []).some(e => e.to === v) ? 1 : 0
-      )
-      .join(",") + "\n";
-
-  });
-
+  let keys = Object.keys(graph).sort();
+  let out = keys.map(u => keys.map(v => graph[u].some(e => e.to === v) ? 1 : 0).join(",")).join("\n");
   alert(out);
-
 }
 
 function clearGraph() {
-
   graph = {};
-
   canvasDiv.querySelectorAll(".node").forEach(n => n.remove());
-
   nodes = {};
-
   nodeIndex = 0;
-  gridX = 20;
-  gridY = 20;
-
+  gridX = 20; gridY = 20;
   edgesSvg.innerHTML = "";
-
-  visited.clear();
-  structure = [];
-  history = [];
-  current = null;
-  selected = null;
-
   statusP.textContent = "";
-
-  clearSelectionHighlight();
-
   updateLists();
-
-}
-function fullReset() {
-
-  clearGraph();
-
-  listInput.value = "";
-  matrixInput.value = "";
-
-  startNodeInp.value = "";
-
-  algorithm = "";
-
-  modeSel.value = "visual";
-
-  switchMode();
-
-}
-
-function removeEdge() {
-
-  const val = edgeList.value;
-
-  if (!val) return;
-
-  const [u, v] = val.split(",");
-
-  graph[u] = graph[u].filter(e => e.to !== v);
-  graph[v] = graph[v].filter(e => e.to !== u);
-
-  drawEdges();
-  updateLists();
-
 }

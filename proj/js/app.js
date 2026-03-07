@@ -88,6 +88,7 @@ function addNode(nameOpt) {
 }
 
 function selectNode(name) {
+  if (modeSel.value !== "visual") return;
   Object.values(nodes).forEach(n => n.classList.remove("selected-node"));
 
   if (!selected) {

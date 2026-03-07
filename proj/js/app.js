@@ -310,7 +310,7 @@ function update() {
   Object.values(nodes).forEach(n => n.classList.remove("visited","current"));
   visited.forEach(v => nodes[v]?.classList.add("visited"));
   if (nodes[current]) nodes[current].classList.add("current");
-  statusP.innerText = `${algorithm} | Queue/Stack: [${structure.join(", ")}]`;
+  statusP.innerText = `${algorithm} | Structure: [${structure.join(", ")}]`;
 }
 
 function checkFinished() {

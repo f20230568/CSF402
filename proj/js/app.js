@@ -350,8 +350,15 @@ function update() {
 
 function checkFinished() {
   const remaining = Object.keys(graph).some(v => !visited.has(v));
+
   if (!remaining && structure.length === 0) {
-    statusP.innerText = `${algorithm} Complete. Full Traversal: [${Array.from(visited).join(" -> ")}]`;
+    Object.values(nodes).forEach(n => n.classList.remove("current"));
+    Object.keys(nodes).forEach(v => {
+      nodes[v]?.classList.add("visited");
+    });
+
+    statusP.innerText =
+      `${algorithm} Complete. Full Traversal: [${Array.from(visited).join(" -> ")}]`;
   }
 }
 

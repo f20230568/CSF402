@@ -1,3 +1,9 @@
+const MAX_RENDER_NODES = 300;
+const MAX_MATRIX_SIZE = 300;
+
+let canvasWidth = 800;
+let canvasHeight = 450;
+
 let graph = {};
 let nodes = {};
 let edges = [];
@@ -38,11 +44,16 @@ const removeEdgeBtn    = document.getElementById("removeEdgeBtn");
 const vertexList = document.getElementById("vertexList");
 const edgeList = document.getElementById("edgeList");
 
+const importListFile   = document.getElementById("importListFile");
+const importListBtn    = document.getElementById("importListBtn");
+const importMatrixFile = document.getElementById("importMatrixFile");
+const importMatrixBtn  = document.getElementById("importMatrixBtn");
+
 const showListGraphBtn = document.getElementById("showListGraphBtn");
 const showMatrixGraphBtn = document.getElementById("showMatrixGraphBtn");
 
 addNodeBtn.onclick      = () => addNode();
-clearBtn.onclick        = () => clearGraph();
+clearBtn.onclick        = () => clearGraph(true);
 bfsBtn.onclick          = () => startAlgo("BFS");
 dfsBtn.onclick          = () => startAlgo("DFS");
 nextBtn.onclick         = () => stepForward();
@@ -54,6 +65,8 @@ removeVertexBtn.onclick = () => removeVertex();
 removeEdgeBtn.onclick   = () => removeEdge();
 showListGraphBtn.onclick = () => buildFromList();
 showMatrixGraphBtn.onclick = () => buildFromMatrix();
+importListBtn.onclick = () => loadFileIntoBox(importListFile, listInput);
+importMatrixBtn.onclick = () => loadFileIntoBox(importMatrixFile, matrixInput);
 
 function switchMode() {
   visualMode.style.display = "none";
@@ -85,6 +98,7 @@ function addNode(nameOpt) {
   if (!graph[name]) graph[name] = [];
   if (!startNodeInp.value) startNodeInp.value = name;
   updateLists();
+  updateCanvasSize(gridX, gridY);
 }
 
 function selectNode(name) {
@@ -120,13 +134,17 @@ function selectNode(name) {
 
 function placeNodesGrid(names) {
 
-  const cols = Math.ceil(Math.sqrt(names.length)); // grid width
+  if (names.length > MAX_RENDER_NODES) {
+    alert("Graph too large for visual rendering. Loaded in data mode only.");
+    return;
+  }
+
+  const cols = Math.min(names.length, 10);  // or 10–15
   const startX = 40;
   const startY = 40;
-  const gap = 80;
+  const gap = 140;
 
   names.forEach((name, i) => {
-
     const row = Math.floor(i / cols);
     const col = i % cols;
 
@@ -147,29 +165,47 @@ function placeNodesGrid(names) {
   });
 
   nodeIndex = names.length;
+  updateCanvasSize(gridX, gridY);
 }
 
 function drawEdges() {
+
+  if (Object.keys(graph).length > MAX_RENDER_NODES) {
+    edgesSvg.innerHTML = "";
+    return;
+  }
+
+  let maxX = 800, maxY = 450;
+
+  Object.values(nodes).forEach(n => {
+    maxX = Math.max(maxX, n.offsetLeft + 100);
+    maxY = Math.max(maxY, n.offsetTop + 100);
+  });
+
+  edgesSvg.setAttribute("width", maxX);
+  edgesSvg.setAttribute("height", maxY);
+
+  // Clear once
   edgesSvg.innerHTML = "";
+
+  // Track drawn edges
   let seenEdges = new Set();
 
+  // Draw edges
   for (let u in graph) {
     (graph[u] || []).forEach(e => {
       let v = e.to;
+
       let edgeKey = [u, v].sort().join("-");
       if (seenEdges.has(edgeKey)) return;
       seenEdges.add(edgeKey);
 
       if (!nodes[u] || !nodes[v]) return;
 
-      let r1 = nodes[u].getBoundingClientRect();
-      let r2 = nodes[v].getBoundingClientRect();
-      let c  = canvasDiv.getBoundingClientRect();
-
-      let x1 = r1.left - c.left + 22;
-      let y1 = r1.top  - c.top  + 22;
-      let x2 = r2.left - c.left + 22;
-      let y2 = r2.top  - c.top  + 22;
+      let x1 = nodes[u].offsetLeft + 22;
+      let y1 = nodes[u].offsetTop  + 22;
+      let x2 = nodes[v].offsetLeft + 22;
+      let y2 = nodes[v].offsetTop  + 22;
 
       let line = document.createElementNS("http://www.w3.org/2000/svg","line");
       line.setAttribute("x1", x1);
@@ -385,7 +421,7 @@ function exportMatrix() {
   updateLists();
 }*/
 
-function clearGraph() {
+function clearGraph(clearInputs=true) {
 
   graph = {};
   nodes = {};
@@ -411,27 +447,42 @@ function clearGraph() {
   statusP.textContent = "";
   startNodeInp.value = "";
 
+ if (clearInputs) {
+  listInput.value = "";
+  matrixInput.value = "";
+  fileInput.value="";
+  importListFile.value = "";
+  importMatrixFile.value = "";
+  importListFile.name="";
+  importMatrixFile.name="";
+ }
 }
 
 function buildFromList() {
-
-  clearGraph();
+  
+  clearGraph(false);
 
   let lines = listInput.value.trim().split("\n");
-  let names = [];
+  let namesSet = new Set();
 
   lines.forEach(line => {
     let [node] = line.split(":");
-    node = node.trim().toUpperCase();
-    if (!names.includes(node)) names.push(node);
+    if (!node) return;
+    namesSet.add(node.trim().toUpperCase());
   });
+
+  let names = Array.from(namesSet);
 
   placeNodesGrid(names);
 
   lines.forEach(line => {
 
     let [node, neighbors] = line.split(":");
+    if (!node) return;
+
     node = node.trim().toUpperCase();
+
+    if (!graph[node]) graph[node] = [];
 
     if (!neighbors) return;
 
@@ -439,52 +490,103 @@ function buildFromList() {
 
       n = n.trim().toUpperCase();
 
-      if (!graph[node]) graph[node] = [];
-      graph[node].push({to:n,w:1});
-
       if (!graph[n]) graph[n] = [];
-      graph[n].push({to:node,w:1});
+
+      // Avoid duplicate edges
+      if (!graph[node].some(e => e.to === n)) {
+        graph[node].push({to:n,w:1});
+        graph[n].push({to:node,w:1});
+      }
 
     });
 
   });
 
-  drawEdges();
+  if (names.length <= MAX_RENDER_NODES) {
+    drawEdges();
+  }
+
   updateLists();
 }
 
 function buildFromMatrix() {
 
-  clearGraph();
+  clearGraph(false);
 
   let rows = matrixInput.value.trim().split("\n");
-  let matrix = rows.map(r => r.split(",").map(Number));
+  let size = rows.length;
 
-  let size = matrix.length;
+  if (size > MAX_MATRIX_SIZE) {
+    alert("Matrix too large! Processing in lightweight mode.");
+  }
+
   let labels = [];
-
-  for (let i=0;i<size;i++) {
-    labels.push(String.fromCharCode(65+i));
+  for (let i = 0; i < size; i++) {
+    labels.push(String.fromCharCode(65 + (i % 26)) + Math.floor(i / 26));
   }
 
   placeNodesGrid(labels);
 
-  for (let i=0;i<size;i++) {
-    for (let j=i+1;j<size;j++) {
+  for (let i = 0; i < size; i++) {
 
-      if (matrix[i][j] === 1) {
+    let cols = rows[i].split(",");
 
-        let u = labels[i];
+    let u = labels[i];
+    if (!graph[u]) graph[u] = [];
+
+    for (let j = i + 1; j < cols.length; j++) {
+
+      if (cols[j].trim() === "1") {
+
         let v = labels[j];
 
-        graph[u].push({to:v,w:1});
-        graph[v].push({to:u,w:1});
+        if (!graph[v]) graph[v] = [];
+
+        graph[u].push({ to: v, w: 1 });
+        graph[v].push({ to: u, w: 1 });
 
       }
-
     }
   }
 
-  drawEdges();
+  if (size <= MAX_RENDER_NODES) {
+    drawEdges();
+  }
+
   updateLists();
+  //satusP.innerText = `Loaded matrix with ${size} nodes`;
+}
+
+function loadFileIntoBox(fileInput, targetBox) {
+  const file = fileInput.files[0];
+  if (!file) return alert("Select a file first");
+
+  const reader = new FileReader();
+
+  reader.onload = function(e) {
+    const text = e.target.result;
+
+    // Prevent UI freeze for huge files
+    setTimeout(() => {
+      targetBox.value = text;
+    }, 0);
+  };
+
+  reader.readAsText(file);
+}
+
+function updateCanvasSize(x, y) {
+
+  const padding = 100;
+
+  let newWidth = Math.max(800, x + padding);
+  let newHeight = Math.max(450, y + padding);
+
+  if (newWidth !== canvasWidth || newHeight !== canvasHeight) {
+    canvasWidth = newWidth;
+    canvasHeight = newHeight;
+
+    edgesSvg.setAttribute("width", canvasWidth);
+    edgesSvg.setAttribute("height", canvasHeight);
+  }
 }

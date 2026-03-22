@@ -14,8 +14,11 @@ let algorithm = "";
 let current = null;
 let selected = null;
 let nodeIndex = 0;
-let timer = 0; // Add this global variable at the top of your script
-let timeData = {}; // Stores { nodeName: { d: discovery, f: finish } }
+
+let timer = 0;
+let timeData = {};
+let pendingNeighbors = []; 
+let traversalOrder = []; 
 
 let gridX = 20, gridY = 20;
 const STEP = 70;
@@ -213,7 +216,7 @@ function drawEdges() {
       let qx = midX + (curviness * -dy) / len;
       let qy = midY + (curviness * dx) / len;
 
-      let path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      let path = document.createElementNS("http:
       let d = `M ${x1} ${y1} Q ${qx} ${qy} ${x2} ${y2}`;
       path.setAttribute("d", d);
       path.setAttribute("stroke", "black");
@@ -221,7 +224,7 @@ function drawEdges() {
       path.setAttribute("fill", "transparent");
       edgesSvg.appendChild(path);
 
-      let text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      let text = document.createElementNS("http:
       text.setAttribute("x", qx);
       text.setAttribute("y", qy);
       text.textContent = e.w;
@@ -315,11 +318,12 @@ function startAlgo(type) {
   const s = startNodeInp.value.trim().toUpperCase();
   if (!graph[s]) return alert("Node not found");
   
-  // RESET DATA
   history = [];
   visited.clear();
   timeData = {}; 
+  traversalOrder = []; 
   timer = 0;
+  pendingNeighbors = [];
   
   structure = [s];
   current = null;
@@ -337,13 +341,13 @@ function startAlgo(type) {
 
   snapshot();
   
-  // 1. Pick the current node
+  
   current = (algorithm === "BFS") ? structure.shift() : structure.pop();
 
   if (!visited.has(current)) {
     visited.add(current);
     
-    // 2. Assign Discovery Time
+    
     timer++;
     if (!timeData[current]) timeData[current] = {};
     timeData[current].d = timer;
@@ -361,8 +365,8 @@ function startAlgo(type) {
       }
     });
     
-    // 3. Assign Finish Time 
-    // (In this simplified step-by-step, we mark it finished after its neighbors are added)
+    
+    
     timer++;
     timeData[current].f = timer;
   }
@@ -386,117 +390,142 @@ function startAlgo(type) {
 }*/
 
 function stepForward() {
-  if (!structure.length) {
-    const remaining = Object.keys(graph).sort().find(v => !visited.has(v));
-    if (!remaining) return; 
-    structure.push(remaining);
-    
-    // Initial Discovery of a new component
+  snapshot(); 
+
+  
+  if (pendingNeighbors.length > 0) {
+    let nextV = pendingNeighbors.shift();
     timer++;
-    if (!timeData[remaining]) timeData[remaining] = { d: timer };
+    timeData[nextV] = { d: timer };
+    structure.push(nextV);
+    update();
+    return;
   }
 
-  snapshot();
-
-  // 1. Dequeue the next node to process it
-  current = (algorithm === "BFS") ? structure.shift() : structure.pop();
-
-  if (!visited.has(current)) {
-    visited.add(current);
-    
-    // 2. Mark as Finished now that we are processing its neighbors
+  
+  if (current && timeData[current] && timeData[current].f === undefined) {
     timer++;
-    if (!timeData[current]) timeData[current] = { d: timer }; // Safety check
     timeData[current].f = timer;
-
-    // 3. Get neighbors and discover them
+    
+    
+    traversalOrder.push(current); 
+    
     let neighbors = (graph[current] || [])
       .map(e => e.to)
-      .filter(v => !visited.has(v) && !structure.includes(v))
+      .filter(v => !visited.has(v) && !structure.includes(v) && !pendingNeighbors.includes(v))
       .sort();
 
     if (algorithm === "DFS") neighbors.reverse();
-
-    neighbors.forEach(v => {
-      structure.push(v);
-      // Discovery Time happens when they enter the "Structure"
-      timer++;
-      timeData[v] = { d: timer };
-    });
-  }
-  
-  update();
-  checkFinished();
+    pendingNeighbors = neighbors;
+    
+    update();
+    checkFinished();
+    return;
 }
-function checkFinished() {
-  const remaining = Object.keys(graph).some(v => !visited.has(v));
-
-  if (!remaining && structure.length === 0) {
-    // Final node needs a finish time too!
-    if (current && timeData[current] && timeData[current].f === undefined) {
-      timer++;
-      timeData[current].f = timer;
+  
+  if (structure.length > 0) {
+    current = (algorithm === "BFS") ? structure.shift() : structure.pop();
+    
+    if (!visited.has(current)) {
+      visited.add(current);
+      
+      if (!timeData[current]) {
+        timer++;
+        timeData[current] = { d: timer };
+      }
     }
+    update();
+  } else {
+    
+    const remaining = Object.keys(graph).sort().find(v => !visited.has(v));
+    if (remaining) {
+      structure.push(remaining);
+      stepForward(); 
+    }
+  }
+}
 
+function checkFinished() {
+  const totalNodes = Object.keys(graph).length;
+  const allVisited = visited.size === totalNodes;
+  const nothingLeftToProcess = structure.length === 0 && pendingNeighbors.length === 0;
+  
+  
+  const lastNodeFinished = current ? (timeData[current]?.f !== undefined) : true;
+
+  if (allVisited && nothingLeftToProcess && lastNodeFinished) {
     Object.values(nodes).forEach(n => n.classList.remove("current"));
-    statusP.innerText = `${algorithm} Complete.`;
-    update(); // Re-render to show final finish times
+    
+    
+    statusP.innerText = 
+      `${algorithm} Complete. Full Traversal: [${traversalOrder.join(" -> ")}]`;
+    
+    
+    update();
   }
 }
 
 function runToEnd() {
   if (!algorithm) return alert("Select BFS or DFS first");
-  while (visited.size < Object.keys(graph).length || structure.length > 0) {
+  
+  const totalNodes = Object.keys(graph).length;
+  let safetyNet = 0;
+  const maxTicks = totalNodes * 10; 
+
+  
+  while (traversalOrder.length < totalNodes && safetyNet < maxTicks) {
     stepForward();
-
-    if (!structure.length && !Object.keys(graph).some(v => !visited.has(v))) break;
+    safetyNet++;
   }
-}
-
-function stepBack() {
-  if (!history.length) return;
-  let s = history.pop();
-  visited = new Set(s.visited);
-  structure = [...s.structure];
-  current = s.current;
-  update();
+  
+  update(); 
 }
 
 function snapshot() {
   history.push({ 
     visited: Array.from(visited), 
     structure: [...structure], 
-    current 
+    current: current,
+    timer: timer,
+    timeData: JSON.parse(JSON.stringify(timeData)),
+    pendingNeighbors: [...pendingNeighbors],
+    traversalOrder: [...traversalOrder] 
   });
 }
 
+function stepBack() {
+  if (!history.length) return;
+  let s = history.pop();
+  
+  visited = new Set(s.visited);
+  structure = [...s.structure];
+  current = s.current;
+  timer = s.timer;
+  timeData = JSON.parse(JSON.stringify(s.timeData)); 
+  pendingNeighbors = [...(s.pendingNeighbors || [])];
+  traversalOrder = [...(s.traversalOrder || [])]; 
+  
+  update();
+}
 
 function update() {
   Object.values(nodes).forEach(n => {
     n.classList.remove("visited", "current");
-    
-    // Clean up old timestamp spans
     const existingStamp = n.querySelector(".timestamp");
     if (existingStamp) existingStamp.remove();
 
     const nodeName = n.textContent;
     if (timeData[nodeName]) {
-      const { d, f } = timeData[nodeName];
+      const d = timeData[nodeName].d ?? "-";
+      const f = timeData[nodeName].f ?? "-";
       let span = document.createElement("span");
       span.className = "timestamp";
-      // Displaying as (Discovery, Finish)
-      span.textContent = `${d || '?'}/${f || '?'}`;
-      
-      // Styling to make it sit above the node
+      span.textContent = `${d}/${f}`;
       span.style.cssText = `
-        position: absolute;
-        top: -25px;
-        left: 50%;
-        transform: translateX(-50%);
-        font-size: 12px;
-        font-weight: bold;
-        color: #ff5722;
-        white-space: nowrap;
+        position: absolute; top: -25px; left: 50%;
+        transform: translateX(-50%); font-size: 13px;
+        font-weight: bold; color: #ff5722; white-space: nowrap;
+        pointer-events: none; text-shadow: 1px 1px 0px #fff;
       `;
       n.appendChild(span);
     }
@@ -504,7 +533,16 @@ function update() {
 
   visited.forEach(v => nodes[v]?.classList.add("visited"));
   if (nodes[current]) nodes[current].classList.add("current");
-  statusP.innerText = `${algorithm} | Structure: [${structure.join(", ")}]`;
+
+  
+  const totalNodes = Object.keys(graph).length;
+  const isFinished = (traversalOrder.length === totalNodes && totalNodes > 0);
+
+  if (isFinished) {
+    statusP.innerText = `${algorithm} Complete. Full Traversal: [${traversalOrder.join(" -> ")}]`;
+  } else {
+    statusP.innerText = `${algorithm || "Idle"} | Structure: [${structure.join(", ")}]`;
+  }
 }
 
 function downloadFile(filename, text) {
@@ -611,7 +649,7 @@ function buildFromList() {
 
       if (!graph[n]) graph[n] = [];
 
-      // Avoid duplicate edges
+      
       if (!graph[node].some(e => e.to === n)) {
         graph[node].push({to:n,w:1});
         graph[n].push({to:node,w:1});
@@ -673,7 +711,7 @@ function buildFromMatrix() {
   }
 
   updateLists();
-  //satusP.innerText = `Loaded matrix with ${size} nodes`;
+  
 }
 
 function loadFileIntoBox(fileInput, targetBox) {

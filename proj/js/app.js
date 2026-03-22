@@ -139,7 +139,7 @@ function placeNodesGrid(names) {
     return;
   }
 
-  const cols = Math.min(names.length, 10);  // or 10–15
+  const cols = Math.min(names.length, 10);  
   const startX = 40;
   const startY = 40;
   const gap = 140;
@@ -185,13 +185,10 @@ function drawEdges() {
   edgesSvg.setAttribute("width", maxX);
   edgesSvg.setAttribute("height", maxY);
 
-  // Clear once
   edgesSvg.innerHTML = "";
 
-  // Track drawn edges
   let seenEdges = new Set();
 
-  // Draw edges
   for (let u in graph) {
     (graph[u] || []).forEach(e => {
       let v = e.to;
@@ -319,7 +316,6 @@ function startAlgo(type) {
 }
 
 function stepForward() {
-  // If structure is empty but graph isn't fully explored, pick the next alphabetical node
   if (!structure.length) {
     const remaining = Object.keys(graph).sort().find(v => !visited.has(v));
     if (!remaining) return; 
@@ -332,13 +328,11 @@ function stepForward() {
   if (!visited.has(current)) {
     visited.add(current);
     
-    // Get neighbors and sort them alphabetically
     let neighbors = (graph[current] || [])
       .map(e => e.to)
       .filter(v => !visited.has(v))
       .sort();
 
-    // DFS needs to push neighbors in reverse alphabetical order so they are popped in correct order
     if (algorithm === "DFS") neighbors.reverse();
 
     neighbors.forEach(v => {
@@ -492,7 +486,6 @@ function buildFromList() {
 
       if (!graph[n]) graph[n] = [];
 
-      // Avoid duplicate edges
       if (!graph[node].some(e => e.to === n)) {
         graph[node].push({to:n,w:1});
         graph[n].push({to:node,w:1});
@@ -566,7 +559,6 @@ function loadFileIntoBox(fileInput, targetBox) {
   reader.onload = function(e) {
     const text = e.target.result;
 
-    // Prevent UI freeze for huge files
     setTimeout(() => {
       targetBox.value = text;
     }, 0);

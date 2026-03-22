@@ -14,6 +14,8 @@ let algorithm = "";
 let current = null;
 let selected = null;
 let nodeIndex = 0;
+let timer = 0; // Add this global variable at the top of your script
+let timeData = {}; // Stores { nodeName: { d: discovery, f: finish } }
 
 let gridX = 20, gridY = 20;
 const STEP = 70;
@@ -139,7 +141,7 @@ function placeNodesGrid(names) {
     return;
   }
 
-  const cols = Math.min(names.length, 10);  // or 10–15
+  const cols = Math.min(names.length, 10);  
   const startX = 40;
   const startY = 40;
   const gap = 140;
@@ -313,8 +315,12 @@ function startAlgo(type) {
   const s = startNodeInp.value.trim().toUpperCase();
   if (!graph[s]) return alert("Node not found");
   
+  // RESET DATA
   history = [];
   visited.clear();
+  timeData = {}; 
+  timer = 0;
+  
   structure = [s];
   current = null;
   algorithm = type;
@@ -322,8 +328,7 @@ function startAlgo(type) {
   update();
 }
 
-function stepForward() {
-  // If structure is empty but graph isn't fully explored, pick the next alphabetical node
+/*function stepForward() {
   if (!structure.length) {
     const remaining = Object.keys(graph).sort().find(v => !visited.has(v));
     if (!remaining) return; 
@@ -331,18 +336,23 @@ function stepForward() {
   }
 
   snapshot();
+  
+  // 1. Pick the current node
   current = (algorithm === "BFS") ? structure.shift() : structure.pop();
 
   if (!visited.has(current)) {
     visited.add(current);
     
-    // Get neighbors and sort them alphabetically
+    // 2. Assign Discovery Time
+    timer++;
+    if (!timeData[current]) timeData[current] = {};
+    timeData[current].d = timer;
+
     let neighbors = (graph[current] || [])
       .map(e => e.to)
       .filter(v => !visited.has(v))
       .sort();
 
-    // DFS needs to push neighbors in reverse alphabetical order so they are popped in correct order
     if (algorithm === "DFS") neighbors.reverse();
 
     neighbors.forEach(v => {
@@ -350,9 +360,88 @@ function stepForward() {
         structure.push(v);
       }
     });
+    
+    // 3. Assign Finish Time 
+    // (In this simplified step-by-step, we mark it finished after its neighbors are added)
+    timer++;
+    timeData[current].f = timer;
   }
+  
   update();
   checkFinished();
+}*/
+
+/*function checkFinished() {
+  const remaining = Object.keys(graph).some(v => !visited.has(v));
+
+  if (!remaining && structure.length === 0) {
+    Object.values(nodes).forEach(n => n.classList.remove("current"));
+    Object.keys(nodes).forEach(v => {
+      nodes[v]?.classList.add("visited");
+    });
+
+    statusP.innerText =
+      `${algorithm} Complete. Full Traversal: [${Array.from(visited).join(" -> ")}]`;
+  }
+}*/
+
+function stepForward() {
+  if (!structure.length) {
+    const remaining = Object.keys(graph).sort().find(v => !visited.has(v));
+    if (!remaining) return; 
+    structure.push(remaining);
+    
+    // Initial Discovery of a new component
+    timer++;
+    if (!timeData[remaining]) timeData[remaining] = { d: timer };
+  }
+
+  snapshot();
+
+  // 1. Dequeue the next node to process it
+  current = (algorithm === "BFS") ? structure.shift() : structure.pop();
+
+  if (!visited.has(current)) {
+    visited.add(current);
+    
+    // 2. Mark as Finished now that we are processing its neighbors
+    timer++;
+    if (!timeData[current]) timeData[current] = { d: timer }; // Safety check
+    timeData[current].f = timer;
+
+    // 3. Get neighbors and discover them
+    let neighbors = (graph[current] || [])
+      .map(e => e.to)
+      .filter(v => !visited.has(v) && !structure.includes(v))
+      .sort();
+
+    if (algorithm === "DFS") neighbors.reverse();
+
+    neighbors.forEach(v => {
+      structure.push(v);
+      // Discovery Time happens when they enter the "Structure"
+      timer++;
+      timeData[v] = { d: timer };
+    });
+  }
+  
+  update();
+  checkFinished();
+}
+function checkFinished() {
+  const remaining = Object.keys(graph).some(v => !visited.has(v));
+
+  if (!remaining && structure.length === 0) {
+    // Final node needs a finish time too!
+    if (current && timeData[current] && timeData[current].f === undefined) {
+      timer++;
+      timeData[current].f = timer;
+    }
+
+    Object.values(nodes).forEach(n => n.classList.remove("current"));
+    statusP.innerText = `${algorithm} Complete.`;
+    update(); // Re-render to show final finish times
+  }
 }
 
 function runToEnd() {
@@ -381,37 +470,63 @@ function snapshot() {
   });
 }
 
+
 function update() {
-  Object.values(nodes).forEach(n => n.classList.remove("visited","current"));
+  Object.values(nodes).forEach(n => {
+    n.classList.remove("visited", "current");
+    
+    // Clean up old timestamp spans
+    const existingStamp = n.querySelector(".timestamp");
+    if (existingStamp) existingStamp.remove();
+
+    const nodeName = n.textContent;
+    if (timeData[nodeName]) {
+      const { d, f } = timeData[nodeName];
+      let span = document.createElement("span");
+      span.className = "timestamp";
+      // Displaying as (Discovery, Finish)
+      span.textContent = `${d || '?'}/${f || '?'}`;
+      
+      // Styling to make it sit above the node
+      span.style.cssText = `
+        position: absolute;
+        top: -25px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 12px;
+        font-weight: bold;
+        color: #ff5722;
+        white-space: nowrap;
+      `;
+      n.appendChild(span);
+    }
+  });
+
   visited.forEach(v => nodes[v]?.classList.add("visited"));
   if (nodes[current]) nodes[current].classList.add("current");
   statusP.innerText = `${algorithm} | Structure: [${structure.join(", ")}]`;
 }
 
-function checkFinished() {
-  const remaining = Object.keys(graph).some(v => !visited.has(v));
-
-  if (!remaining && structure.length === 0) {
-    Object.values(nodes).forEach(n => n.classList.remove("current"));
-    Object.keys(nodes).forEach(v => {
-      nodes[v]?.classList.add("visited");
-    });
-
-    statusP.innerText =
-      `${algorithm} Complete. Full Traversal: [${Array.from(visited).join(" -> ")}]`;
-  }
+function downloadFile(filename, text) {
+  const element = document.createElement('a');
+  element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
+  element.setAttribute('download', filename);
+  element.style.display = 'none';
+  document.body.appendChild(element);
+  element.click();
+  document.body.removeChild(element);
 }
 
 function exportList() {
   let out = "";
   for (let u in graph) out += `${u}:${graph[u].map(e => e.to).join(",")}\n`;
-  alert(out);
+  downloadFile("graph_list.txt", out);
 }
 
 function exportMatrix() {
   let keys = Object.keys(graph).sort();
   let out = keys.map(u => keys.map(v => graph[u].some(e => e.to === v) ? 1 : 0).join(",")).join("\n");
-  alert(out);
+  downloadFile("graph_matrix.txt", out);
 }
 
 /*function clearGraph() {
@@ -570,7 +685,6 @@ function loadFileIntoBox(fileInput, targetBox) {
   reader.onload = function(e) {
     const text = e.target.result;
 
-    // Prevent UI freeze for huge files
     setTimeout(() => {
       targetBox.value = text;
     }, 0);

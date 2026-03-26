@@ -173,7 +173,7 @@ function placeNodesGrid(names) {
   updateCanvasSize(gridX, gridY);
 }
 
-function drawEdges() {
+/*function drawEdges() {
   if (Object.keys(graph).length > MAX_RENDER_NODES) {
     edgesSvg.innerHTML = "";
     return;
@@ -216,7 +216,7 @@ function drawEdges() {
       let qx = midX + (curviness * -dy) / len;
       let qy = midY + (curviness * dx) / len;
 
-      let path = document.createElementNS("http:
+      let path = document.createElementNS("http://www.w3.org/2000/svg","line");
       let d = `M ${x1} ${y1} Q ${qx} ${qy} ${x2} ${y2}`;
       path.setAttribute("d", d);
       path.setAttribute("stroke", "black");
@@ -224,13 +224,86 @@ function drawEdges() {
       path.setAttribute("fill", "transparent");
       edgesSvg.appendChild(path);
 
-      let text = document.createElementNS("http:
+      let text = document.createElementNS("http://www.w3.org/2000/svg","line");
       text.setAttribute("x", qx);
       text.setAttribute("y", qy);
       text.textContent = e.w;
       text.setAttribute("class", "edge-label");
       text.setAttribute("text-anchor", "middle");
       edgesSvg.appendChild(text);
+    });
+  }
+}*/
+
+function drawEdges() {
+  if (Object.keys(graph).length > MAX_RENDER_NODES) {
+    edgesSvg.innerHTML = "";
+    return;
+  }
+
+  let maxX = 800, maxY = 450;
+  Object.values(nodes).forEach(n => {
+    maxX = Math.max(maxX, n.offsetLeft + 100);
+    maxY = Math.max(maxY, n.offsetTop + 100);
+  });
+
+  edgesSvg.setAttribute("width", maxX);
+  edgesSvg.setAttribute("height", maxY);
+  edgesSvg.innerHTML = "";
+
+  edgesSvg.innerHTML = `
+    <defs>
+      <marker id="arrowhead" markerWidth="10" markerHeight="7" 
+              refX="19" refY="3.5" orient="auto">
+        <polygon points="0 0, 10 3.5, 0 7" fill="black"></polygon>
+      </marker>
+    </defs>`;
+
+  const SVG_NS = "http://www.w3.org/2000/svg"; 
+  let seenEdges = new Set();
+
+  for (let u in graph) {
+    (graph[u] || []).forEach(e => {
+      let v = e.to;
+      let edgeKey = [u, v].sort().join("-");
+      if (seenEdges.has(edgeKey)) return;
+      seenEdges.add(edgeKey);
+
+      if (!nodes[u] || !nodes[v]) return;
+
+      let x1 = nodes[u].offsetLeft + 22;
+      let y1 = nodes[u].offsetTop + 22;
+      let x2 = nodes[v].offsetLeft + 22;
+      let y2 = nodes[v].offsetTop + 22;
+
+      let midX = (x1 + x2) / 2;
+      let midY = (y1 + y2) / 2;
+      let curviness = 20; 
+      let dx = x2 - x1;
+      let dy = y2 - y1;
+      let len = Math.sqrt(dx * dx + dy * dy) || 1;
+
+      let qx = midX + (curviness * -dy) / len;
+      let qy = midY + (curviness * dx) / len;
+
+      let path = document.createElementNS(SVG_NS, "path");
+      let d = `M ${x1} ${y1} Q ${qx} ${qy} ${x2} ${y2}`;
+      path.setAttribute("d", d);
+      path.setAttribute("stroke", "#555");
+      path.setAttribute("stroke-width", "2");
+      path.setAttribute("fill", "transparent");
+      edgesSvg.appendChild(path);
+      if (e.w !== undefined) {
+        let text = document.createElementNS(SVG_NS, "text");
+        text.setAttribute("x", qx);
+        text.setAttribute("y", qy - 5); 
+        text.textContent = e.w;
+        text.setAttribute("class", "edge-label");
+        text.setAttribute("text-anchor", "middle");
+        text.style.fontSize = "12px";
+        text.style.fill = "#333";
+        edgesSvg.appendChild(text);
+      }
     });
   }
 }
@@ -318,16 +391,17 @@ function startAlgo(type) {
   const s = startNodeInp.value.trim().toUpperCase();
   if (!graph[s]) return alert("Node not found");
   
+  // RESET ALL DATA
   history = [];
   visited.clear();
   timeData = {}; 
-  traversalOrder = []; 
   timer = 0;
-  pendingNeighbors = [];
-  
-  structure = [s];
-  current = null;
   algorithm = type;
+  current = null;
+
+  // Initial Action: Discover the start node
+  structure = [{ name: s, type: 'discover' }];
+  
   snapshot();
   update();
 }
@@ -390,78 +464,85 @@ function startAlgo(type) {
 }*/
 
 function stepForward() {
-  snapshot(); 
-
-  
-  if (pendingNeighbors.length > 0) {
-    let nextV = pendingNeighbors.shift();
-    timer++;
-    timeData[nextV] = { d: timer };
-    structure.push(nextV);
-    update();
-    return;
-  }
-
-  
-  if (current && timeData[current] && timeData[current].f === undefined) {
-    timer++;
-    timeData[current].f = timer;
-    
-    
-    traversalOrder.push(current); 
-    
-    let neighbors = (graph[current] || [])
-      .map(e => e.to)
-      .filter(v => !visited.has(v) && !structure.includes(v) && !pendingNeighbors.includes(v))
-      .sort();
-
-    if (algorithm === "DFS") neighbors.reverse();
-    pendingNeighbors = neighbors;
-    
-    update();
-    checkFinished();
-    return;
-}
-  
-  if (structure.length > 0) {
-    current = (algorithm === "BFS") ? structure.shift() : structure.pop();
-    
-    if (!visited.has(current)) {
-      visited.add(current);
-      
-      if (!timeData[current]) {
-        timer++;
-        timeData[current] = { d: timer };
-      }
-    }
-    update();
-  } else {
-    
+  if (!structure.length) {
+    // Check for undiscovered components
     const remaining = Object.keys(graph).sort().find(v => !visited.has(v));
-    if (remaining) {
-      structure.push(remaining);
+    if (!remaining) return; 
+    structure.push({ name: remaining, type: 'discover' });
+  }
+
+  snapshot();
+
+  // Pick the next action (BFS uses queue, DFS uses stack)
+  let task = (algorithm === "BFS") ? structure.shift() : structure.pop();
+  const { name, type } = task;
+
+  if (type === 'discover') {
+    if (visited.has(name)) {
+      // If we already visited it via another path, skip this timer increment and move to next
       stepForward(); 
+      return;
+    }
+
+    // ACTION: Discover Node
+    timer++;
+    timeData[name] = { d: timer };
+    visited.add(name);
+    current = name;
+
+    // After discovering, the next logical step for this node is to "Finish" it
+    // In BFS, we finish it immediately after discovery to look for neighbors
+    // In DFS, we finish it only after its neighbors are done
+    if (algorithm === "BFS") {
+      structure.push({ name: name, type: 'finish' });
+    } else {
+      structure.push({ name: name, type: 'finish' });
+      
+      // Get neighbors for DFS (Reverse sort for alphabetical stack behavior)
+      let neighbors = (graph[name] || [])
+        .map(e => e.to)
+        .filter(v => !visited.has(v))
+        .sort().reverse();
+
+      neighbors.forEach(v => {
+        structure.push({ name: v, type: 'discover' });
+      });
+    }
+  } 
+  else if (type === 'finish') {
+    // ACTION: Finish Node
+    timer++;
+    timeData[name].f = timer;
+    current = name;
+
+    // For BFS, finding neighbors happens ONE BY ONE after the node is "finished"
+    if (algorithm === "BFS") {
+      let neighbors = (graph[name] || [])
+        .map(e => e.to)
+        .filter(v => !visited.has(v) && !structure.some(s => s.name === v))
+        .sort();
+
+      neighbors.forEach(v => {
+        structure.push({ name: v, type: 'discover' });
+      });
     }
   }
+
+  update();
 }
 
 function checkFinished() {
-  const totalNodes = Object.keys(graph).length;
-  const allVisited = visited.size === totalNodes;
-  const nothingLeftToProcess = structure.length === 0 && pendingNeighbors.length === 0;
-  
-  
-  const lastNodeFinished = current ? (timeData[current]?.f !== undefined) : true;
+  const allVisited = Object.keys(graph).every(v => visited.has(v));
+  const stackEmpty = structure.length === 0;
 
-  if (allVisited && nothingLeftToProcess && lastNodeFinished) {
+  if (allVisited && stackEmpty) {
     Object.values(nodes).forEach(n => n.classList.remove("current"));
     
+    // Construct the traversal string from the visited Set
+    const traversalOrder = Array.from(visited).join(" -> ");
+    statusP.innerText = `${algorithm} Complete. Full Traversal: [${traversalOrder}]`;
     
-    statusP.innerText = 
-      `${algorithm} Complete. Full Traversal: [${traversalOrder.join(" -> ")}]`;
-    
-    
-    update();
+    update(); // Final render to ensure all finish times are visible
   }
 }
 
@@ -508,7 +589,7 @@ function stepBack() {
   update();
 }
 
-function update() {
+/*function update() {
   Object.values(nodes).forEach(n => {
     n.classList.remove("visited", "current");
     const existingStamp = n.querySelector(".timestamp");
@@ -535,6 +616,7 @@ function update() {
   if (nodes[current]) nodes[current].classList.add("current");
 
   
+  
   const totalNodes = Object.keys(graph).length;
   const isFinished = (traversalOrder.length === totalNodes && totalNodes > 0);
 
@@ -542,6 +624,62 @@ function update() {
     statusP.innerText = `${algorithm} Complete. Full Traversal: [${traversalOrder.join(" -> ")}]`;
   } else {
     statusP.innerText = `${algorithm || "Idle"} | Structure: [${structure.join(", ")}]`;
+  }
+}*/
+
+function update() {
+  // 1. Reset visual states and update timestamps
+  Object.values(nodes).forEach(n => {
+    n.classList.remove("visited", "current");
+    
+    // Clean up old timestamp spans to prevent stacking
+    const existingStamp = n.querySelector(".timestamp");
+    if (existingStamp) existingStamp.remove();
+
+    const nodeName = n.textContent;
+    if (timeData[nodeName]) {
+      const { d, f } = timeData[nodeName];
+      let span = document.createElement("span");
+      span.className = "timestamp";
+      
+      // Display as (Discovery / Finish)
+      // Uses '?' if the value hasn't been assigned yet
+      span.textContent = `${d || '?'}/${f || '?'}`;
+      
+      // Styling to position the timer above the node
+      span.style.cssText = `
+        position: absolute;
+        top: -25px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 12px;
+        font-weight: bold;
+        color: #ff5722;
+        white-space: nowrap;
+      `;
+      n.appendChild(span);
+    }
+  });
+
+  // 2. Highlight visited and currently active nodes
+  visited.forEach(v => nodes[v]?.classList.add("visited"));
+  if (nodes[current]) nodes[current].classList.add("current");
+
+  // 3. Handle Status Text and Traversal Display
+  const allVisited = Object.keys(graph).every(v => visited.has(v));
+  const stackEmpty = structure.length === 0;
+
+  if (allVisited && stackEmpty && algorithm !== "") {
+    // If the algorithm is finished, show the full path
+    const traversalOrder = Array.from(visited).join(" -> ");
+    statusP.innerText = `${algorithm} Complete. Full Traversal: [${traversalOrder}]`;
+  } else {
+    // If still running, show the current contents of the Stack/Queue
+    // FIX: Map objects to names to prevent "[object Object]" display
+    const structureDisplay = structure.map(item => 
+      typeof item === 'string' ? item : item.name
+    );
+    statusP.innerText = `${algorithm} | Structure: [${structureDisplay.join(", ")}]`;
   }
 }
 

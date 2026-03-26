@@ -54,3 +54,35 @@ button, select, input { margin: 5px; }
   font-size: 12px;
   fill: black;
 }
+
+/* Base style for the toggle button */
+.toggle-btn {
+  padding: 8px 16px;
+  cursor: pointer;
+  border: 1px solid #ccc;
+  background-color: #f0f0f0;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  font-weight: bold;
+  outline: none;
+}
+
+/* Hover effect when not active */
+.toggle-btn:hover {
+  background-color: #e5e5e5;
+}
+
+/* The "ON" State - triggered by the .active-mode class in your JS */
+#addNodeBtn.active-mode {
+  background-color: #4CAF50 !important; /* Green for "Adding" mode */
+  color: white;
+  border-color: #388E3C;
+  box-shadow: inset 0 3px 5px rgba(0,0,0,0.2); /* Makes it look pressed */
+  transform: translateY(1px); /* Slight sink effect */
+}
+
+/* Visual cue for the canvas when in "Add Vertex" mode */
+#canvas.adding-mode {
+  cursor: crosshair;
+  background-color: #fafafa;
+}

@@ -14,6 +14,8 @@ let algorithm = "";
 let current = null;
 let selected = null;
 let nodeIndex = 0;
+let isAddingNode = false;
+let edgeSource = null; // Tracks the first node clicked when creating an edge
 
 let timer = 0;
 let timeData = {};
@@ -34,7 +36,34 @@ const statusP      = document.getElementById("status");
 const canvasDiv    = document.getElementById("canvas");
 const edgesSvg     = document.getElementById("edges");
 
-const addNodeBtn       = document.getElementById("addNodeBtn");
+//const addNodeBtn       = document.getElementById("addNodeBtn");
+
+addNodeBtn.onclick = () => {
+  isAddingNode = !isAddingNode;
+  edgeSource = null; // Clear any half-finished edges
+  
+  if (isAddingNode) {
+    addNodeBtn.classList.add("active-mode");
+    addNodeBtn.textContent = "Stop Adding"; // Text changes to show it's a toggle
+    document.getElementById("currentModeText").innerText = "Vertex Placement (Click Canvas)";
+    canvasDiv.classList.add("adding-mode"); // Useful for the CSS crosshair
+  } else {
+    addNodeBtn.classList.remove("active-mode");
+    addNodeBtn.textContent = "Add Vertex";
+    document.getElementById("currentModeText").innerText = "Edge Creation (Click Nodes)";
+    canvasDiv.classList.remove("adding-mode");
+  }
+};
+
+canvasDiv.onclick = (e) => {
+  if (isAddingNode && (e.target === canvasDiv || e.target === edgesSvg)) {
+    const rect = canvasDiv.getBoundingClientRect();
+    const x = e.clientX - rect.left - 22; 
+    const y = e.clientY - rect.top - 22;
+    addNode(null, x, y);
+  }
+};
+
 const clearBtn         = document.getElementById("clearBtn");
 const bfsBtn           = document.getElementById("bfsBtn");
 const dfsBtn           = document.getElementById("dfsBtn");
@@ -84,54 +113,61 @@ function switchMode() {
   else if (m === "matrix") matrixMode.style.display = "block";
 }
 
-function addNode(nameOpt) {
+
+function addNode(nameOpt, x, y) {
   const name = nameOpt || String.fromCharCode(65 + nodeIndex++);
   let div = document.createElement("div");
   div.className = "node";
   div.textContent = name;
-  div.style.left = gridX + "px";
-  div.style.top = gridY + "px";
+  
+  div.style.left = (x !== undefined ? x : gridX) + "px";
+  div.style.top = (y !== undefined ? y : gridY) + "px";
 
-  gridX += STEP;
-  if (gridX > 720) { gridX = 20; gridY += STEP; }
+  if (x === undefined) {
+    gridX += STEP;
+    if (gridX > 720) { gridX = 20; gridY += STEP; }
+  }
 
   makeDraggable(div);
-  div.onclick = () => selectNode(name);
+  
+  // NEW LOGIC FOR EDGE VS SELECTION
+  div.onclick = (e) => {
+    e.stopPropagation(); 
+
+    if (isAddingNode) {
+      // While in "Add Vertex" mode, clicking a node just selects it
+      selectNode(name);
+    } else {
+      // EDGE CREATION MODE
+      if (!edgeSource) {
+        edgeSource = name;
+        nodes[name].classList.add("current"); // Visual feedback for first selection
+        statusP.innerText = `Source: ${name}. Now click destination node.`;
+      } else if (edgeSource === name) {
+        // Deselect if clicking the same node
+        nodes[name].classList.remove("current");
+        edgeSource = null;
+      } else {
+        // Create the edge
+        addEdge(edgeSource, name);
+        nodes[edgeSource].classList.remove("current");
+        edgeSource = null;
+        statusP.innerText = `Edge created!`;
+      }
+    }
+  };
 
   canvasDiv.appendChild(div);
   nodes[name] = div;
   if (!graph[name]) graph[name] = [];
-  if (!startNodeInp.value) startNodeInp.value = name;
   updateLists();
-  updateCanvasSize(gridX, gridY);
 }
 
-function selectNode(name) {
-  if (modeSel.value !== "visual") return;
-  Object.values(nodes).forEach(n => n.classList.remove("selected-node"));
-
-  if (!selected) {
-    selected = name;
-    if (nodes[name]) nodes[name].classList.add("selected-node");
-  } else {
-    if (selected === name) {
-      selected = null;
-      return;
-    }
-
-    let weight = prompt("Edge weight?", "1");
-    if (weight === null) {
-      selected = null;
-      return;
-    }
-
-    if (!graph[selected]) graph[selected] = [];
-    graph[selected].push({ to: name, w: weight });
-
-    if (!graph[name]) graph[name] = [];
-    graph[name].push({ to: selected, w: weight });
-
-    selected = null;
+// Helper function to handle the graph data
+function addEdge(u, v) {
+  if (!graph[u].some(e => e.to === v)) {
+    graph[u].push({ to: v, w: 1 });
+    graph[v].push({ to: u, w: 1 }); // Assuming undirected
     drawEdges();
     updateLists();
   }
@@ -173,11 +209,11 @@ function placeNodesGrid(names) {
   updateCanvasSize(gridX, gridY);
 }
 
-function drawEdges() {
+/*function drawEdges() {
   if (Object.keys(graph).length > MAX_RENDER_NODES) {
     edgesSvg.innerHTML = "";
     return;
-  }
+  }function ad
 
   let maxX = 800, maxY = 450;
   Object.values(nodes).forEach(n => {
@@ -216,7 +252,7 @@ function drawEdges() {
       let qx = midX + (curviness * -dy) / len;
       let qy = midY + (curviness * dx) / len;
 
-      let path = document.createElementNS("http:
+      let path = document.createElementNS("http://www.w3.org/2000/svg","line");
       let d = `M ${x1} ${y1} Q ${qx} ${qy} ${x2} ${y2}`;
       path.setAttribute("d", d);
       path.setAttribute("stroke", "black");
@@ -224,13 +260,86 @@ function drawEdges() {
       path.setAttribute("fill", "transparent");
       edgesSvg.appendChild(path);
 
-      let text = document.createElementNS("http:
+      let text = document.createElementNS("http://www.w3.org/2000/svg","line");
       text.setAttribute("x", qx);
       text.setAttribute("y", qy);
       text.textContent = e.w;
       text.setAttribute("class", "edge-label");
       text.setAttribute("text-anchor", "middle");
       edgesSvg.appendChild(text);
+    });
+  }
+}*/
+
+function drawEdges() {
+  if (Object.keys(graph).length > MAX_RENDER_NODES) {
+    edgesSvg.innerHTML = "";
+    return;
+  }
+
+  let maxX = 800, maxY = 450;
+  Object.values(nodes).forEach(n => {
+    maxX = Math.max(maxX, n.offsetLeft + 100);
+    maxY = Math.max(maxY, n.offsetTop + 100);
+  });
+
+  edgesSvg.setAttribute("width", maxX);
+  edgesSvg.setAttribute("height", maxY);
+  edgesSvg.innerHTML = "";
+
+  edgesSvg.innerHTML = `
+    <defs>
+      <marker id="arrowhead" markerWidth="10" markerHeight="7" 
+              refX="19" refY="3.5" orient="auto">
+        <polygon points="0 0, 10 3.5, 0 7" fill="black"></polygon>
+      </marker>
+    </defs>`;
+
+  const SVG_NS = "http://www.w3.org/2000/svg"; 
+  let seenEdges = new Set();
+
+  for (let u in graph) {
+    (graph[u] || []).forEach(e => {
+      let v = e.to;
+      let edgeKey = [u, v].sort().join("-");
+      if (seenEdges.has(edgeKey)) return;
+      seenEdges.add(edgeKey);
+
+      if (!nodes[u] || !nodes[v]) return;
+
+      let x1 = nodes[u].offsetLeft + 22;
+      let y1 = nodes[u].offsetTop + 22;
+      let x2 = nodes[v].offsetLeft + 22;
+      let y2 = nodes[v].offsetTop + 22;
+
+      let midX = (x1 + x2) / 2;
+      let midY = (y1 + y2) / 2;
+      let curviness = 20; 
+      let dx = x2 - x1;
+      let dy = y2 - y1;
+      let len = Math.sqrt(dx * dx + dy * dy) || 1;
+
+      let qx = midX + (curviness * -dy) / len;
+      let qy = midY + (curviness * dx) / len;
+
+      let path = document.createElementNS(SVG_NS, "path");
+      let d = `M ${x1} ${y1} Q ${qx} ${qy} ${x2} ${y2}`;
+      path.setAttribute("d", d);
+      path.setAttribute("stroke", "#555");
+      path.setAttribute("stroke-width", "2");
+      path.setAttribute("fill", "transparent");
+      edgesSvg.appendChild(path);
+      if (e.w !== undefined) {
+        let text = document.createElementNS(SVG_NS, "text");
+        text.setAttribute("x", qx);
+        text.setAttribute("y", qy - 5); 
+        text.textContent = e.w;
+        text.setAttribute("class", "edge-label");
+        text.setAttribute("text-anchor", "middle");
+        text.style.fontSize = "12px";
+        text.style.fill = "#333";
+        edgesSvg.appendChild(text);
+      }
     });
   }
 }

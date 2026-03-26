@@ -344,7 +344,7 @@ function stepForward() {
   update();
   checkFinished();
 }
-
+//
 function runToEnd() {
   if (!algorithm) return alert("Select BFS or DFS first");
   while (visited.size < Object.keys(graph).length || structure.length > 0) {

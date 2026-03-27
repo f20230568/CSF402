@@ -305,12 +305,21 @@ function startAlgo(type) {
   if (!startNodeInp.value) return alert("Enter start node");
   const s = startNodeInp.value.trim().toUpperCase();
   if (!graph[s]) return alert("Node not found");
-  
+
   history = [];
   visited.clear();
-  structure = [s];
-  current = null;
+  timeData = {}; 
+  timer = 0;
   algorithm = type;
+  current = null;
+
+  if (algorithm === "BFS") {
+    timeData[s] = { distance: 0, parent: "None" };
+  } else {
+  }
+
+  structure = [{ name: s, type: 'discover' }];
+  
   snapshot();
   update();
 }
@@ -319,31 +328,74 @@ function stepForward() {
   if (!structure.length) {
     const remaining = Object.keys(graph).sort().find(v => !visited.has(v));
     if (!remaining) return; 
-    structure.push(remaining);
+    
+    // Handle disjoint components
+    if (algorithm === "BFS") {
+      timeData[remaining] = { distance: 0, parent: "None" };
+    }
+    structure.push({ name: remaining, type: 'discover' });
   }
 
   snapshot();
-  current = (algorithm === "BFS") ? structure.shift() : structure.pop();
 
-  if (!visited.has(current)) {
-    visited.add(current);
+  let task = (algorithm === "BFS") ? structure.shift() : structure.pop();
+  const { name, type } = task;
+
+  if (type === 'discover') {
+    if (visited.has(name)) {
+      stepForward(); 
+      return;
+    }
+
+    timer++;
+    if (algorithm === "DFS") {
+      timeData[name] = { d: timer };
+    }
     
-    let neighbors = (graph[current] || [])
-      .map(e => e.to)
-      .filter(v => !visited.has(v))
-      .sort();
+    visited.add(name);
+    current = name;
 
-    if (algorithm === "DFS") neighbors.reverse();
+    if (algorithm === "BFS") {
+      structure.push({ name: name, type: 'finish' });
+    } else {
+      structure.push({ name: name, type: 'finish' });
+      let neighbors = (graph[name] || [])
+        .map(e => e.to)
+        .filter(v => !visited.has(v))
+        .sort().reverse();
 
-    neighbors.forEach(v => {
-      if (!structure.includes(v)) {
-        structure.push(v);
-      }
-    });
+      neighbors.forEach(v => {
+        structure.push({ name: v, type: 'discover' });
+      });
+    }
+  } 
+  else if (type === 'finish') {
+    timer++;
+    if (algorithm === "DFS") {
+      timeData[name].f = timer;
+    }
+    current = name;
+
+    if (algorithm === "BFS") {
+      let neighbors = (graph[name] || [])
+        .map(e => e.to)
+        .filter(v => !visited.has(v) && !structure.some(s => s.name === v))
+        .sort();
+
+      neighbors.forEach(v => {
+        // BFS: Assign Parent and Distance as soon as we see the neighbor
+        timeData[v] = { 
+          distance: timeData[name].distance + 1, 
+          parent: name 
+        };
+        structure.push({ name: v, type: 'discover' });
+      });
+    }
   }
+
   update();
-  checkFinished();
 }
+
 //
 function runToEnd() {
   if (!algorithm) return alert("Select BFS or DFS first");
@@ -372,10 +424,66 @@ function snapshot() {
 }
 
 function update() {
-  Object.values(nodes).forEach(n => n.classList.remove("visited","current"));
+  Object.values(nodes).forEach(n => {
+    n.classList.remove("visited", "current");
+    
+    // Remove any existing timestamp span to refresh the view
+    const existingStamp = n.querySelector(".timestamp");
+    if (existingStamp) existingStamp.remove();
+
+    const nodeName = n.textContent;
+    
+    // If we have data for this node, create the overlay
+    if (timeData[nodeName]) {
+      let span = document.createElement("span");
+      span.className = "timestamp";
+      
+      if (algorithm === "BFS") {
+        const p = timeData[nodeName].parent ?? "?";
+        const d = timeData[nodeName].distance ?? "?";
+        span.textContent = `P:${p}, D:${d}`;
+      } else {
+        const d = timeData[nodeName].d ?? "?";
+        const f = timeData[nodeName].f ?? "?";
+        span.textContent = `${d}/${f}`;
+      }
+      
+      // Styling to match your previous timestamp look
+      span.style.cssText = `
+        position: absolute;
+        top: -25px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 11px;
+        font-weight: bold;
+        color: #ff5722;
+        white-space: nowrap;
+        background: rgba(255, 255, 255, 0.8);
+        padding: 2px 4px;
+        border-radius: 4px;
+        pointer-events: none;
+      `;
+      n.appendChild(span);
+    }
+  });
+
+  // Highlights
   visited.forEach(v => nodes[v]?.classList.add("visited"));
   if (nodes[current]) nodes[current].classList.add("current");
-  statusP.innerText = `${algorithm} | Structure: [${structure.join(", ")}]`;
+
+  // Status Bar
+  const allVisited = Object.keys(graph).every(v => visited.has(v));
+  const stackEmpty = structure.length === 0;
+
+  if (allVisited && stackEmpty && algorithm !== "") {
+    const traversalOrder = Array.from(visited).join(" -> ");
+    statusP.innerText = `${algorithm} Complete. Full Traversal: [${traversalOrder}]`;
+  } else {
+    const structureDisplay = structure.map(item => 
+      typeof item === 'string' ? item : item.name
+    );
+    statusP.innerText = `${algorithm || "Idle"} | Structure: [${structureDisplay.join(", ")}]`;
+  }
 }
 
 function checkFinished() {

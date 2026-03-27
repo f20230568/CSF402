@@ -399,6 +399,11 @@ function startAlgo(type) {
   algorithm = type;
   current = null;
 
+  if (algorithm === "BFS") {
+    timeData[s] = { distance: 0, parent: "None" };
+  } else {
+  }
+
   // Initial Action: Discover the start node
   structure = [{ name: s, type: 'discover' }];
   
@@ -465,40 +470,39 @@ function startAlgo(type) {
 
 function stepForward() {
   if (!structure.length) {
-    // Check for undiscovered components
     const remaining = Object.keys(graph).sort().find(v => !visited.has(v));
     if (!remaining) return; 
+    
+    // Handle disjoint components
+    if (algorithm === "BFS") {
+      timeData[remaining] = { distance: 0, parent: "None" };
+    }
     structure.push({ name: remaining, type: 'discover' });
   }
 
   snapshot();
 
-  // Pick the next action (BFS uses queue, DFS uses stack)
   let task = (algorithm === "BFS") ? structure.shift() : structure.pop();
   const { name, type } = task;
 
   if (type === 'discover') {
     if (visited.has(name)) {
-      // If we already visited it via another path, skip this timer increment and move to next
       stepForward(); 
       return;
     }
 
-    // ACTION: Discover Node
     timer++;
-    timeData[name] = { d: timer };
+    if (algorithm === "DFS") {
+      timeData[name] = { d: timer };
+    }
+    
     visited.add(name);
     current = name;
 
-    // After discovering, the next logical step for this node is to "Finish" it
-    // In BFS, we finish it immediately after discovery to look for neighbors
-    // In DFS, we finish it only after its neighbors are done
     if (algorithm === "BFS") {
       structure.push({ name: name, type: 'finish' });
     } else {
       structure.push({ name: name, type: 'finish' });
-      
-      // Get neighbors for DFS (Reverse sort for alphabetical stack behavior)
       let neighbors = (graph[name] || [])
         .map(e => e.to)
         .filter(v => !visited.has(v))
@@ -510,12 +514,12 @@ function stepForward() {
     }
   } 
   else if (type === 'finish') {
-    // ACTION: Finish Node
     timer++;
-    timeData[name].f = timer;
+    if (algorithm === "DFS") {
+      timeData[name].f = timer;
+    }
     current = name;
 
-    // For BFS, finding neighbors happens ONE BY ONE after the node is "finished"
     if (algorithm === "BFS") {
       let neighbors = (graph[name] || [])
         .map(e => e.to)
@@ -523,6 +527,11 @@ function stepForward() {
         .sort();
 
       neighbors.forEach(v => {
+        // BFS: Assign Parent and Distance as soon as we see the neighbor
+        timeData[v] = { 
+          distance: timeData[name].distance + 1, 
+          parent: name 
+        };
         structure.push({ name: v, type: 'discover' });
       });
     }
@@ -628,58 +637,65 @@ function stepBack() {
 }*/
 
 function update() {
-  // 1. Reset visual states and update timestamps
   Object.values(nodes).forEach(n => {
     n.classList.remove("visited", "current");
     
-    // Clean up old timestamp spans to prevent stacking
+    // Remove any existing timestamp span to refresh the view
     const existingStamp = n.querySelector(".timestamp");
     if (existingStamp) existingStamp.remove();
 
     const nodeName = n.textContent;
+    
+    // If we have data for this node, create the overlay
     if (timeData[nodeName]) {
-      const { d, f } = timeData[nodeName];
       let span = document.createElement("span");
       span.className = "timestamp";
       
-      // Display as (Discovery / Finish)
-      // Uses '?' if the value hasn't been assigned yet
-      span.textContent = `${d || '?'}/${f || '?'}`;
+      if (algorithm === "BFS") {
+        const p = timeData[nodeName].parent ?? "?";
+        const d = timeData[nodeName].distance ?? "?";
+        span.textContent = `Par.:${p}, Dis.:${d}`;
+      } else {
+        const d = timeData[nodeName].d ?? "?";
+        const f = timeData[nodeName].f ?? "?";
+        span.textContent = `${d}/${f}`;
+      }
       
-      // Styling to position the timer above the node
+      // Styling to match your previous timestamp look
       span.style.cssText = `
         position: absolute;
         top: -25px;
         left: 50%;
         transform: translateX(-50%);
-        font-size: 12px;
+        font-size: 11px;
         font-weight: bold;
         color: #ff5722;
         white-space: nowrap;
+        background: rgba(255, 255, 255, 0.8);
+        padding: 2px 4px;
+        border-radius: 4px;
+        pointer-events: none;
       `;
       n.appendChild(span);
     }
   });
 
-  // 2. Highlight visited and currently active nodes
+  // Highlights
   visited.forEach(v => nodes[v]?.classList.add("visited"));
   if (nodes[current]) nodes[current].classList.add("current");
 
-  // 3. Handle Status Text and Traversal Display
+  // Status Bar
   const allVisited = Object.keys(graph).every(v => visited.has(v));
   const stackEmpty = structure.length === 0;
 
   if (allVisited && stackEmpty && algorithm !== "") {
-    // If the algorithm is finished, show the full path
     const traversalOrder = Array.from(visited).join(" -> ");
     statusP.innerText = `${algorithm} Complete. Full Traversal: [${traversalOrder}]`;
   } else {
-    // If still running, show the current contents of the Stack/Queue
-    // FIX: Map objects to names to prevent "[object Object]" display
     const structureDisplay = structure.map(item => 
       typeof item === 'string' ? item : item.name
     );
-    statusP.innerText = `${algorithm} | Structure: [${structureDisplay.join(", ")}]`;
+    statusP.innerText = `${algorithm || "Idle"} | Structure: [${structureDisplay.join(", ")}]`;
   }
 }
 

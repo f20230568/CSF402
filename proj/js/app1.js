@@ -473,7 +473,6 @@ function stepForward() {
     const remaining = Object.keys(graph).sort().find(v => !visited.has(v));
     if (!remaining) return; 
     
-    // Handle disjoint components
     if (algorithm === "BFS") {
       timeData[remaining] = { distance: 0, parent: "None" };
     }
@@ -483,26 +482,19 @@ function stepForward() {
   snapshot();
 
   let task = (algorithm === "BFS") ? structure.shift() : structure.pop();
-  const { name, type } = task;
+  const { name, type, parent } = task;
 
   if (type === 'discover') {
-    if (visited.has(name)) {
-      stepForward(); 
-      return;
-    }
+    if (visited.has(name)) return stepForward(); 
 
     timer++;
+    visited.add(name);
+    current = name; // HIGHLIGHT: The node being visited
+
     if (algorithm === "DFS") {
       timeData[name] = { d: timer };
-    }
-    
-    visited.add(name);
-    current = name;
-
-    if (algorithm === "BFS") {
       structure.push({ name: name, type: 'finish' });
-    } else {
-      structure.push({ name: name, type: 'finish' });
+      
       let neighbors = (graph[name] || [])
         .map(e => e.to)
         .filter(v => !visited.has(v))
@@ -511,33 +503,45 @@ function stepForward() {
       neighbors.forEach(v => {
         structure.push({ name: v, type: 'discover' });
       });
+    } else {
+      structure.push({ name: name, type: 'expand' });
     }
   } 
-  else if (type === 'finish') {
-    timer++;
-    if (algorithm === "DFS") {
-      timeData[name].f = timer;
+  else if (type === 'expand') {
+    current = name; // HIGHLIGHT: Keep focus on Parent while finding kids
+    let neighbors = (graph[name] || [])
+      .map(e => e.to)
+      .filter(v => !visited.has(v) && !structure.some(s => s.name === v))
+      .sort();
+
+    // Add neighbor-check tasks to the FRONT of the queue
+    neighbors.reverse().forEach(v => {
+      structure.unshift({ name: v, type: 'queue_neighbor', parent: name });
+    });
+  }
+  else if (type === 'queue_neighbor') {
+    current = parent; 
+    
+    if (!visited.has(name)) {
+      timeData[name] = { 
+        distance: timeData[parent].distance + 1, 
+        parent: parent 
+      };
+      structure.push({ name: name, type: 'discover' });
+    } else {
+      return stepForward();
     }
+  }
+  else if (type === 'finish') {
     current = name;
-
-    if (algorithm === "BFS") {
-      let neighbors = (graph[name] || [])
-        .map(e => e.to)
-        .filter(v => !visited.has(v) && !structure.some(s => s.name === v))
-        .sort();
-
-      neighbors.forEach(v => {
-        // BFS: Assign Parent and Distance as soon as we see the neighbor
-        timeData[v] = { 
-          distance: timeData[name].distance + 1, 
-          parent: name 
-        };
-        structure.push({ name: v, type: 'discover' });
-      });
+    if (algorithm === "DFS") {
+      timer++;
+      timeData[name].f = timer;
     }
   }
 
   update();
+  checkFinished();
 }
 
 function checkFinished() {
@@ -654,7 +658,7 @@ function update() {
       if (algorithm === "BFS") {
         const p = timeData[nodeName].parent ?? "?";
         const d = timeData[nodeName].distance ?? "?";
-        span.textContent = `Par.:${p}, Dis.:${d}`;
+        span.textContent = `${p},${d}`;
       } else {
         const d = timeData[nodeName].d ?? "?";
         const f = timeData[nodeName].f ?? "?";

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Graph Drawer</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+
+<body>
+
+<h2>Graph Drawer</h2>
+<a href="index.html" style="color: blue;">← Back to Visualizer</a>
+<br><br>
+
+<select id="mode" onchange="switchMode()">
+  <option value="visual">Visual Builder</option>
+  <option value="list">Adjacency List</option>
+  <option value="matrix">Adjacency Matrix</option>
+</select>
+
+<div id="visualMode">
+  <button id="addNodeBtn">Add Vertex</button>
+  <p>Click two vertices to create an edge.</p>
+</div>
+
+<div id="listMode" style="display:none">
+  <textarea id="listInput" placeholder="A:B,C&#10;B:A&#10;C:A"></textarea>
+  <br>
+  <button id="showListGraphBtn">Show Graph</button>
+  <input type="file" id="importListFile" accept=".txt">
+  <button id="importListBtn">Import List</button>
+</div>
+
+<div id="matrixMode" style="display:none">
+  <textarea id="matrixInput" placeholder="0,1,1&#10;1,0,0&#10;1,0,0"></textarea>
+  <br>
+  <button id="showMatrixGraphBtn">Show Graph</button>
+  <input type="file" id="importMatrixFile" accept=".txt">
+  <button id="importMatrixBtn">Import Matrix</button>
+</div>
+
+<button id="clearBtn">Clear Graph</button>
+<button id="exportListBtn">Export List</button>
+<button id="exportMatrixBtn">Export Matrix</button>
+
+<hr>
+
+<div style="background: #f9f9f9; padding: 10px; border-radius: 5px;">
+    <strong>Vertex Management:</strong>
+    <select id="vertexList"></select>
+    <button id="removeVertexBtn">Remove Vertex</button>
+    
+    <br>
+    <strong>Edge Management:</strong>
+    <select id="edgeList"></select> 
+    <button id="removeEdgeBtn">Remove Edge</button>
+</div>
+
+<div style="display:none">
+    <input id="startNode" />
+    <p id="status"></p>
+    <button id="bfsBtn"></button>
+    <button id="dfsBtn"></button>
+    <button id="nextBtn"></button>
+    <button id="runAllBtn"></button>
+    <button id="undoBtn"></button>
+</div>
+
+<div style="background: #eef2f3; padding: 10px; border-radius: 5px; margin-top: 10px; border: 1px solid #ccc;">
+    <strong>Force Directed Layout:</strong>
+    <button id="toggleForceParams">Open Options</button>
+    
+    <div id="forceParams" style="display:none; margin-top:10px; padding: 10px; border-top: 1px solid #ccc;">
+        <label>Repulsion: <input type="number" id="forceRepulsion" value="1000" style="width:60px"></label>
+        <label>Attraction: <input type="number" id="forceAttraction" value="0.05" step="0.01" style="width:60px"></label>
+        <label>Damping: <input type="number" id="forceDamping" value="0.85" step="0.05" style="width:60px"></label>
+        <label>Iterations: <input type="number" id="forceIterations" value="50" style="width:60px"></label>
+        <br>
+        <button id="runForceAll">Run All at Once</button>
+        <button id="runForceStep">Iterate Once</button>
+    </div>
+</div>
+
+
+<div id="canvas">
+  <svg id="edges">
+    <defs>
+      <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+        <polygon points="0 0, 10 3.5, 0 7" fill="black"></polygon>
+      </marker>
+    </defs>
+  </svg>
+</div>
+
+<div id="coordListContainer" style="margin-top: 20px; padding: 10px; border: 1px solid #ddd; background: #fff;">
+    <h3>Vertex Coordinates</h3>
+    <ul id="coordList" style="column-count: 3; list-style-type: none; padding: 0; font-family: monospace;"></ul>
+</div>
+
+<script src="js/app1.js"></script>
+<script>
+  // Ensure the mode switcher works on this specific page
+  window.onload = function() {
+    switchMode();
+  };
+</script>
+
+</body>
+</html>

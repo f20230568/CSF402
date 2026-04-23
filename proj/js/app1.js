@@ -21,6 +21,10 @@ let pendingNeighbors = [];
 let traversalOrder = []; 
 
 let gridX = 20, gridY = 20;
+// Add these to your variable declarations at the top
+let isForceRunning = false;
+
+
 const STEP = 70;
 
 const modeSel      = document.getElementById("mode");
@@ -56,6 +60,31 @@ const importMatrixBtn  = document.getElementById("importMatrixBtn");
 
 const showListGraphBtn = document.getElementById("showListGraphBtn");
 const showMatrixGraphBtn = document.getElementById("showMatrixGraphBtn");
+
+// Add these to your button assignments
+const forceParamsDiv = document.getElementById("forceParams");
+const toggleForceBtn = document.getElementById("toggleForceParams");
+const runForceAllBtn = document.getElementById("runForceAll");
+const runForceStepBtn = document.getElementById("runForceStep");
+
+if(toggleForceBtn) {
+    toggleForceBtn.onclick = () => {
+        forceParamsDiv.style.display = forceParamsDiv.style.display === "none" ? "block" : "none";
+    };
+}
+
+if (runForceAllBtn) {
+    const forceParamsDiv = document.getElementById("forceParams");
+    const toggleForceBtn = document.getElementById("toggleForceParams");
+    const runForceStepBtn = document.getElementById("runForceStep");
+
+    toggleForceBtn.onclick = () => {
+        forceParamsDiv.style.display = forceParamsDiv.style.display === "none" ? "block" : "none";
+    };
+
+    runForceAllBtn.onclick = () => runForceDirected(true);
+    runForceStepBtn.onclick = () => runForceDirected(false);
+}
 
 addNodeBtn.onclick      = () => addNode();
 clearBtn.onclick        = () => clearGraph(true);
@@ -374,12 +403,14 @@ function makeDraggable(el) {
   el.onmousedown = e => {
     offsetX = e.offsetX;
     offsetY = e.offsetY;
-    document.onmousemove = m => {
-      const rect = canvasDiv.getBoundingClientRect();
-      el.style.left = (m.pageX - rect.left - offsetX) + "px";
-      el.style.top  = (m.pageY - rect.top  - offsetY) + "px";
-      drawEdges();
-    };
+    // Inside makeDraggable...
+document.onmousemove = m => {
+  const rect = canvasDiv.getBoundingClientRect();
+  el.style.left = (m.pageX - rect.left - offsetX) + "px";
+  el.style.top  = (m.pageY - rect.top  - offsetY) + "px";
+  drawEdges();
+  if (typeof updateCoords === "function") updateCoords(); // Update red letters
+};
     document.onmouseup = () => {
       document.onmousemove = null;
     };
@@ -903,4 +934,119 @@ function updateCanvasSize(x, y) {
     edgesSvg.setAttribute("width", canvasWidth);
     edgesSvg.setAttribute("height", canvasHeight);
   }
+}
+
+// Check if we are in Manager Mode by looking for a unique button
+function runForceDirected(allAtOnce) {
+    // 1. Get the iteration input element
+    const iterInput = document.getElementById("forceIterations");
+    let currentIterValue = parseInt(iterInput.value) || 0;
+
+    // 2. Safety Check: If iterations are 0 or less, stop execution
+    if (currentIterValue <= 0) {
+        console.log("Force Directed Layout: Iteration count is 0. Please increase value.");
+        return; 
+    }
+
+    const repulsion = parseFloat(document.getElementById("forceRepulsion").value) || 1000;
+    const attraction = parseFloat(document.getElementById("forceAttraction").value) || 0.05;
+    const damping = parseFloat(document.getElementById("forceDamping").value) || 0.85;
+    
+    // 3. Determine how many loops to run and update the input box
+    let iterationsToRun = 1;
+    if (allAtOnce) {
+        iterationsToRun = currentIterValue;
+        iterInput.value = 0; // Set to 0 because we ran them all
+    } else {
+        iterationsToRun = 1;
+        iterInput.value = currentIterValue - 1; // Reduce by one
+    }
+
+    // --- Physics Calculation Loop ---
+    for (let i = 0; i < iterationsToRun; i++) {
+        let forces = {};
+        const nodeKeys = Object.keys(nodes);
+        nodeKeys.forEach(v => forces[v] = { x: 0, y: 0 });
+
+        // Repulsion
+        for (let i = 0; i < nodeKeys.length; i++) {
+            for (let j = i + 1; j < nodeKeys.length; j++) {
+                let u = nodeKeys[i], v = nodeKeys[j];
+                let dx = nodes[v].offsetLeft - nodes[u].offsetLeft;
+                let dy = nodes[v].offsetTop - nodes[u].offsetTop;
+                let distSq = dx * dx + dy * dy || 1;
+                let dist = Math.sqrt(distSq);
+                let f = repulsion / distSq;
+                
+                let fx = (dx / dist) * f;
+                let fy = (dy / dist) * f;
+                forces[u].x -= fx; forces[u].y -= fy;
+                forces[v].x += fx; forces[v].y += fy;
+            }
+        }
+
+        // Attraction
+        let seenPairs = new Set();
+        for (let u in graph) {
+            if (!graph[u] || !nodes[u]) continue;
+            graph[u].forEach(edge => {
+                let v = edge.to;
+                let pairKey = [u, v].sort().join("-");
+                if (!nodes[v] || seenPairs.has(pairKey)) return;
+                seenPairs.add(pairKey);
+
+                let dx = nodes[v].offsetLeft - nodes[u].offsetLeft;
+                let dy = nodes[v].offsetTop - nodes[u].offsetTop;
+                let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                let f = attraction * dist;
+
+                let fx = (dx / dist) * f;
+                let fy = (dy / dist) * f;
+                forces[u].x += fx; forces[u].y += fy;
+                forces[v].x -= fx; forces[v].y -= fy;
+            });
+        }
+
+        // Apply Position Updates
+        nodeKeys.forEach(v => {
+            let el = nodes[v];
+            el.style.left = (el.offsetLeft + forces[v].x * damping) + "px";
+            el.style.top = (el.offsetTop + forces[v].y * damping) + "px";
+        });
+    }
+
+    drawEdges();
+    updateCoords();
+}
+
+function updateCoords() {
+    const runBtn = document.getElementById("runForceAll");
+    if (!runBtn) return; // Only run in manager.html
+
+    const listUl = document.getElementById("coordList");
+    if (listUl) listUl.innerHTML = ""; // Clear the bottom list
+
+    Object.keys(nodes).sort().forEach(v => {
+        let el = nodes[v];
+        let x = Math.round(el.offsetLeft);
+        let y = Math.round(el.offsetTop);
+
+        // 1. Update red text above vertex
+        let coordSpan = el.querySelector(".coord-label");
+        if (!coordSpan) {
+            coordSpan = document.createElement("span");
+            coordSpan.className = "coord-label";
+            coordSpan.style.cssText = "position:absolute; top:-15px; font-size:9px; color:red; white-space:nowrap; pointer-events:none;";
+            el.appendChild(coordSpan);
+        }
+        coordSpan.textContent = `(${x}, ${y})`;
+
+        // 2. Update list below the box
+        if (listUl) {
+            let li = document.createElement("li");
+            li.innerHTML = `<strong>${v}</strong>: x=${x}, y=${y}`;
+            li.style.padding = "2px 0";
+            listUl.appendChild(li);
+        }
+    });
 }

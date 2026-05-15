@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Advanced DFS / BFS Visualizer</title>
+
+<link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+
+<h2>Graph DFS / BFS Visualizer</h2>
+
+<select id="mode" onchange="switchMode()">
+  <option value="visual">Visual Builder</option>
+  <option value="list">Adjacency List</option>
+  <option value="matrix">Adjacency Matrix</option>
+</select>
+
+
+
+<div id="visualMode">
+  <button id="addNodeBtn">Add Vertex</button>
+  <p>Click two vertices to create an edge.</p>
+</div>
+
+<div id="listMode" style="display:none">
+  <textarea id="listInput" placeholder="A:B,C&#10;B:A&#10;C:A"></textarea>
+  <br>
+  <button id="showListGraphBtn">Show Graph</button>
+  <input type="file" id="importListFile" accept=".txt">
+  <button id="importListBtn">Import List</button>
+</div>
+
+<div id="matrixMode" style="display:none">
+  <textarea id="matrixInput" placeholder="0,1,1&#10;1,0,0&#10;1,0,0"></textarea>
+  <br>
+  <button id="showMatrixGraphBtn">Show Graph</button>
+  <input type="file" id="importMatrixFile" accept=".txt">
+  <button id="importMatrixBtn">Import Matrix</button>
+</div>
+
+<button id="clearBtn">Clear</button>
+
+<br>
+Start Node:
+<input id="startNode" style="width:50px" />
+
+<br><br>
+
+<button id="bfsBtn">Start BFS</button>
+<button id="dfsBtn">Start DFS</button>
+<button id="nextBtn">Next</button>
+<button id="runAllBtn">Run to End</button>
+<button id="undoBtn">Undo Previous Step</button>
+
+
+<button id="exportListBtn">Export List</button>
+<button id="exportMatrixBtn">Export Matrix</button>
+
+<button id="removeVertexBtn">Remove Vertex</button>
+<select id="vertexList"></select>
+
+<button id="removeEdgeBtn">Remove Edge</button>
+<select id="edgeList"></select> 
+
+<p id="status"></p>
+
+
+<div id="canvas">
+  <svg id="edges">
+    <defs>
+      <marker id="arrowhead"
+              markerWidth="10"
+              markerHeight="7"
+              refX="10"
+              refY="3.5"
+              orient="auto"
+              markerUnits="strokeWidth">
+        <polygon points="0 0, 10 3.5, 0 7" fill="black"></polygon>
+      </marker>
+    </defs>
+  </svg>
+</div>
+
+<details style="margin-top:20px;">
+  <summary><strong>Help</strong></summary>
+  <ul>
+    <li>Add vertices and connect them by clicking two vertices (only possible in visual builder).</li>
+    <li>Use adjacency list or matrix to import graphs.</li>
+    <li>Orange = current node, Green = visited.</li>
+    <li>Import text file in proper format for matrix and list.</li>
+    <li>After import, click Show Graph to display.</li>
+    <li>For BFS, the stamps above node are parent of node/ distance from start node (independent of edge weight, counts only number of edges).</li>
+    <li>For DFS, the stamps above node are Discovery time (time at which node enters stack)/ Finish time (time at which node leaves stack). </li>
+  </ul>
+</details>
+
+<script src="app1.js"></script>
+
+<a href="manager.html" style="display: inline-block; margin-bottom: 10px; color: blue; text-decoration: underline;">
+  Go to Graph Drawer
+</a>
+
+</body>
+</html>

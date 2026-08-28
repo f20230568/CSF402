@@ -21,99 +21,109 @@ let pendingNeighbors = [];
 let traversalOrder = []; 
 
 let gridX = 20, gridY = 20;
-// Add these to your variable declarations at the top
 let isForceRunning = false;
-
 
 const STEP = 70;
 
-const modeSel      = document.getElementById("mode");
-const visualMode   = document.getElementById("visualMode");
-const listMode     = document.getElementById("listMode");
-const matrixMode   = document.getElementById("matrixMode");
-const listInput    = document.getElementById("listInput");
-const matrixInput  = document.getElementById("matrixInput");
-const startNodeInp = document.getElementById("startNode");
-const statusP      = document.getElementById("status");
-const canvasDiv    = document.getElementById("canvas");
-const edgesSvg     = document.getElementById("edges");
+// Dynamic DOM getter helper to prevent null pointer references across pages
+const getEl = id => document.getElementById(id);
 
-const addNodeBtn       = document.getElementById("addNodeBtn");
-const clearBtn         = document.getElementById("clearBtn");
-const bfsBtn           = document.getElementById("bfsBtn");
-const dfsBtn           = document.getElementById("dfsBtn");
-const nextBtn          = document.getElementById("nextBtn");
-const runAllBtn        = document.getElementById("runAllBtn");
-const undoBtn          = document.getElementById("undoBtn");
-const exportListBtn    = document.getElementById("exportListBtn");
-const exportMatrixBtn  = document.getElementById("exportMatrixBtn");
-const removeVertexBtn  = document.getElementById("removeVertexBtn");
-const removeEdgeBtn    = document.getElementById("removeEdgeBtn");
+function initAppListeners() {
+  const addNodeBtn       = getEl("addNodeBtn");
+  const clearBtn         = getEl("clearBtn");
+  const bfsBtn           = getEl("bfsBtn");
+  const dfsBtn           = getEl("dfsBtn");
+  const nextBtn          = getEl("nextBtn");
+  const runAllBtn        = getEl("runAllBtn");
+  const undoBtn          = getEl("undoBtn");
+  const exportListBtn    = getEl("exportListBtn");
+  const exportMatrixBtn  = getEl("exportMatrixBtn");
+  const removeVertexBtn  = getEl("removeVertexBtn");
+  const removeEdgeBtn    = getEl("removeEdgeBtn");
+  const showListGraphBtn = getEl("showListGraphBtn");
+  const showMatrixGraphBtn = getEl("showMatrixGraphBtn");
+  const importListFile   = getEl("importListFile");
+  const importListBtn    = getEl("importListBtn");
+  const importMatrixFile = getEl("importMatrixFile");
+  const importMatrixBtn  = getEl("importMatrixBtn");
 
-const vertexList = document.getElementById("vertexList");
-const edgeList = document.getElementById("edgeList");
+  // Clicking the button triggers the file chooser dialog
+  if (importListBtn && importListFile) {
+    importListBtn.onclick = () => importListFile.click();
+    importListFile.onchange = () => loadFileIntoBox(importListFile, getEl("listInput"));
+  }
 
-const importListFile   = document.getElementById("importListFile");
-const importListBtn    = document.getElementById("importListBtn");
-const importMatrixFile = document.getElementById("importMatrixFile");
-const importMatrixBtn  = document.getElementById("importMatrixBtn");
+  if (importMatrixBtn && importMatrixFile) {
+    importMatrixBtn.onclick = () => importMatrixFile.click();
+    importMatrixFile.onchange = () => loadFileIntoBox(importMatrixFile, getEl("matrixInput"));
+  }
+  const toggleForceBtn   = getEl("toggleForceParams");
+  const runForceAllBtn   = getEl("runForceAll");
+  const runForceStepBtn  = getEl("runForceStep");
 
-const showListGraphBtn = document.getElementById("showListGraphBtn");
-const showMatrixGraphBtn = document.getElementById("showMatrixGraphBtn");
+  if (addNodeBtn)       addNodeBtn.onclick = () => addNode();
+  if (clearBtn)         clearBtn.onclick = () => clearGraph(true);
+  if (bfsBtn)           bfsBtn.onclick = () => startAlgo("BFS");
+  if (dfsBtn)           dfsBtn.onclick = () => startAlgo("DFS");
+  if (nextBtn)          nextBtn.onclick = () => stepForward();
+  if (runAllBtn)        runAllBtn.onclick = () => runToEnd();
+  if (undoBtn)          undoBtn.onclick = () => stepBack();
+  if (exportListBtn)    exportListBtn.onclick = () => exportList();
+  if (exportMatrixBtn)  exportMatrixBtn.onclick = () => exportMatrix();
+  if (removeVertexBtn)  removeVertexBtn.onclick = () => removeVertex();
+  if (removeEdgeBtn)    removeEdgeBtn.onclick = () => removeEdge();
+  if (showListGraphBtn) showListGraphBtn.onclick = () => buildFromList();
+  if (showMatrixGraphBtn) showMatrixGraphBtn.onclick = () => buildFromMatrix();
 
-// Add these to your button assignments
-const forceParamsDiv = document.getElementById("forceParams");
-const toggleForceBtn = document.getElementById("toggleForceParams");
-const runForceAllBtn = document.getElementById("runForceAll");
-const runForceStepBtn = document.getElementById("runForceStep");
+  if (importListBtn) {
+    importListBtn.onclick = () => loadFileIntoBox(getEl("importListFile"), getEl("listInput"));
+  }
+  if (importMatrixBtn) {
+    importMatrixBtn.onclick = () => loadFileIntoBox(getEl("importMatrixFile"), getEl("matrixInput"));
+  }
 
-if(toggleForceBtn) {
+  if (toggleForceBtn) {
     toggleForceBtn.onclick = () => {
+      const forceParamsDiv = getEl("forceParams");
+      if (forceParamsDiv) {
         forceParamsDiv.style.display = forceParamsDiv.style.display === "none" ? "block" : "none";
+      }
     };
+  }
+
+  if (runForceAllBtn)  runForceAllBtn.onclick = () => runForceDirected(true);
+  if (runForceStepBtn) runForceStepBtn.onclick = () => runForceDirected(false);
 }
 
-if (runForceAllBtn) {
-    const forceParamsDiv = document.getElementById("forceParams");
-    const toggleForceBtn = document.getElementById("toggleForceParams");
-    const runForceStepBtn = document.getElementById("runForceStep");
-
-    toggleForceBtn.onclick = () => {
-        forceParamsDiv.style.display = forceParamsDiv.style.display === "none" ? "block" : "none";
-    };
-
-    runForceAllBtn.onclick = () => runForceDirected(true);
-    runForceStepBtn.onclick = () => runForceDirected(false);
+// Ensure elements bind reliably on page load
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initAppListeners);
+} else {
+  initAppListeners();
 }
-
-addNodeBtn.onclick      = () => addNode();
-clearBtn.onclick        = () => clearGraph(true);
-bfsBtn.onclick          = () => startAlgo("BFS");
-dfsBtn.onclick          = () => startAlgo("DFS");
-nextBtn.onclick         = () => stepForward();
-runAllBtn.onclick       = () => runToEnd();
-undoBtn.onclick         = () => stepBack();
-exportListBtn.onclick   = () => exportList();
-exportMatrixBtn.onclick = () => exportMatrix();
-removeVertexBtn.onclick = () => removeVertex();
-removeEdgeBtn.onclick   = () => removeEdge();
-showListGraphBtn.onclick = () => buildFromList();
-showMatrixGraphBtn.onclick = () => buildFromMatrix();
-importListBtn.onclick = () => loadFileIntoBox(importListFile, listInput);
-importMatrixBtn.onclick = () => loadFileIntoBox(importMatrixFile, matrixInput);
 
 function switchMode() {
-  visualMode.style.display = "none";
-  listMode.style.display = "none";
-  matrixMode.style.display = "none";
+  const modeSel = getEl("mode");
+  const visualMode = getEl("visualMode");
+  const listMode = getEl("listMode");
+  const matrixMode = getEl("matrixMode");
+
+  if (!modeSel) return;
+  if (visualMode) visualMode.style.display = "none";
+  if (listMode) listMode.style.display = "none";
+  if (matrixMode) matrixMode.style.display = "none";
 
   const m = modeSel.value;
-  if (m === "visual") visualMode.style.display = "block";
-  else if (m === "list") listMode.style.display = "block";
-  else if (m === "matrix") matrixMode.style.display = "block";
+  if (m === "visual" && visualMode) visualMode.style.display = "block";
+  else if (m === "list" && listMode) listMode.style.display = "block";
+  else if (m === "matrix" && matrixMode) matrixMode.style.display = "block";
 }
 
 function addNode(nameOpt) {
+  const canvasDiv = getEl("canvas");
+  const startNodeInp = getEl("startNode");
+  if (!canvasDiv) return;
+
   const name = nameOpt || String.fromCharCode(65 + nodeIndex++);
   let div = document.createElement("div");
   div.className = "node";
@@ -130,13 +140,14 @@ function addNode(nameOpt) {
   canvasDiv.appendChild(div);
   nodes[name] = div;
   if (!graph[name]) graph[name] = [];
-  if (!startNodeInp.value) startNodeInp.value = name;
+  if (startNodeInp && !startNodeInp.value) startNodeInp.value = name;
   updateLists();
   updateCanvasSize(gridX, gridY);
 }
 
 function selectNode(name) {
-  if (modeSel.value !== "visual") return;
+  const modeSel = getEl("mode");
+  if (modeSel && modeSel.value !== "visual") return;
   Object.values(nodes).forEach(n => n.classList.remove("selected-node"));
 
   if (!selected) {
@@ -167,13 +178,15 @@ function selectNode(name) {
 }
 
 function placeNodesGrid(names) {
+  const canvasDiv = getEl("canvas");
+  if (!canvasDiv) return;
 
   if (names.length > MAX_RENDER_NODES) {
     alert("Graph too large for visual rendering. Loaded in data mode only.");
     return;
   }
 
-  const cols = Math.min(names.length, 10);  
+  const cols = Math.min(names.length, 10) || 1;  
   const startX = 40;
   const startY = 40;
   const gap = 140;
@@ -193,7 +206,6 @@ function placeNodesGrid(names) {
     div.onclick = () => selectNode(name);
 
     canvasDiv.appendChild(div);
-
     nodes[name] = div;
     if (!graph[name]) graph[name] = [];
   });
@@ -202,142 +214,11 @@ function placeNodesGrid(names) {
   updateCanvasSize(gridX, gridY);
 }
 
-/*function drawEdges() {
-  if (Object.keys(graph).length > MAX_RENDER_NODES) {
-    edgesSvg.innerHTML = "";
-    return;
-  }
-
-  let maxX = 800, maxY = 450;
-  Object.values(nodes).forEach(n => {
-    maxX = Math.max(maxX, n.offsetLeft + 100);
-    maxY = Math.max(maxY, n.offsetTop + 100);
-  });
-
-  edgesSvg.setAttribute("width", maxX);
-  edgesSvg.setAttribute("height", maxY);
-  edgesSvg.innerHTML = "";
-
-  let seenEdges = new Set();
-
-  for (let u in graph) {
-    (graph[u] || []).forEach(e => {
-      let v = e.to;
-      let edgeKey = [u, v].sort().join("-");
-      if (seenEdges.has(edgeKey)) return;
-      seenEdges.add(edgeKey);
-
-      if (!nodes[u] || !nodes[v]) return;
-
-      let x1 = nodes[u].offsetLeft + 22;
-      let y1 = nodes[u].offsetTop + 22;
-      let x2 = nodes[v].offsetLeft + 22;
-      let y2 = nodes[v].offsetTop + 22;
-
-      let midX = (x1 + x2) / 2;
-      let midY = (y1 + y2) / 2;
-
-      let curviness = 30; 
-      let dx = x2 - x1;
-      let dy = y2 - y1;
-      let len = Math.sqrt(dx * dx + dy * dy);
-
-      let qx = midX + (curviness * -dy) / len;
-      let qy = midY + (curviness * dx) / len;
-
-      let path = document.createElementNS("http://www.w3.org/2000/svg","line");
-      let d = `M ${x1} ${y1} Q ${qx} ${qy} ${x2} ${y2}`;
-      path.setAttribute("d", d);
-      path.setAttribute("stroke", "black");
-      path.setAttribute("stroke-width", "2");
-      path.setAttribute("fill", "transparent");
-      edgesSvg.appendChild(path);
-
-      let text = document.createElementNS("http://www.w3.org/2000/svg","line");
-      text.setAttribute("x", qx);
-      text.setAttribute("y", qy);
-      text.textContent = e.w;
-      text.setAttribute("class", "edge-label");
-      text.setAttribute("text-anchor", "middle");
-      edgesSvg.appendChild(text);
-    });
-  }
-}*/
-
-function drawEdges() {
-  if (Object.keys(graph).length > MAX_RENDER_NODES) {
-    edgesSvg.innerHTML = "";
-    return;
-  }
-
-  let maxX = 800, maxY = 450;
-  Object.values(nodes).forEach(n => {
-    maxX = Math.max(maxX, n.offsetLeft + 100);
-    maxY = Math.max(maxY, n.offsetTop + 100);
-  });
-
-  edgesSvg.setAttribute("width", maxX);
-  edgesSvg.setAttribute("height", maxY);
-  edgesSvg.innerHTML = "";
-
-  edgesSvg.innerHTML = `
-    <defs>
-      <marker id="arrowhead" markerWidth="10" markerHeight="7" 
-              refX="19" refY="3.5" orient="auto">
-        <polygon points="0 0, 10 3.5, 0 7" fill="black"></polygon>
-      </marker>
-    </defs>`;
-
-  const SVG_NS = "http://www.w3.org/2000/svg"; 
-  let seenEdges = new Set();
-
-  for (let u in graph) {
-    (graph[u] || []).forEach(e => {
-      let v = e.to;
-      let edgeKey = [u, v].sort().join("-");
-      if (seenEdges.has(edgeKey)) return;
-      seenEdges.add(edgeKey);
-
-      if (!nodes[u] || !nodes[v]) return;
-
-      let x1 = nodes[u].offsetLeft + 22;
-      let y1 = nodes[u].offsetTop + 22;
-      let x2 = nodes[v].offsetLeft + 22;
-      let y2 = nodes[v].offsetTop + 22;
-
-      let midX = (x1 + x2) / 2;
-      let midY = (y1 + y2) / 2;
-      let curviness = 20; 
-      let dx = x2 - x1;
-      let dy = y2 - y1;
-      let len = Math.sqrt(dx * dx + dy * dy) || 1;
-
-      let qx = midX + (curviness * -dy) / len;
-      let qy = midY + (curviness * dx) / len;
-
-      let path = document.createElementNS(SVG_NS, "path");
-      let d = `M ${x1} ${y1} Q ${qx} ${qy} ${x2} ${y2}`;
-      path.setAttribute("d", d);
-      path.setAttribute("stroke", "#555");
-      path.setAttribute("stroke-width", "2");
-      path.setAttribute("fill", "transparent");
-      edgesSvg.appendChild(path);
-      if (e.w !== undefined) {
-        let text = document.createElementNS(SVG_NS, "text");
-        text.setAttribute("x", qx);
-        text.setAttribute("y", qy - 5); 
-        text.textContent = e.w;
-        text.setAttribute("class", "edge-label");
-        text.setAttribute("text-anchor", "middle");
-        text.style.fontSize = "12px";
-        text.style.fill = "#333";
-        edgesSvg.appendChild(text);
-      }
-    });
-  }
-}
-
 function updateLists() {
+  const vertexList = getEl("vertexList");
+  const edgeList = getEl("edgeList");
+  if (!vertexList || !edgeList) return;
+
   vertexList.innerHTML = "";
   edgeList.innerHTML = "";
 
@@ -365,6 +246,9 @@ function updateLists() {
 }
 
 function removeVertex() {
+  const vertexList = getEl("vertexList");
+  const startNodeInp = getEl("startNode");
+  if (!vertexList) return;
   const v = vertexList.value;
   if (!v) return;
 
@@ -378,7 +262,7 @@ function removeVertex() {
     delete nodes[v];
   }
 
-  if (startNodeInp.value === v) {
+  if (startNodeInp && startNodeInp.value === v) {
     startNodeInp.value = Object.keys(graph)[0] || "";
   }
 
@@ -387,6 +271,8 @@ function removeVertex() {
 }
 
 function removeEdge() {
+  const edgeList = getEl("edgeList");
+  if (!edgeList) return;
   const val = edgeList.value;
   if (!val) return;
 
@@ -403,14 +289,15 @@ function makeDraggable(el) {
   el.onmousedown = e => {
     offsetX = e.offsetX;
     offsetY = e.offsetY;
-    // Inside makeDraggable...
-document.onmousemove = m => {
-  const rect = canvasDiv.getBoundingClientRect();
-  el.style.left = (m.pageX - rect.left - offsetX) + "px";
-  el.style.top  = (m.pageY - rect.top  - offsetY) + "px";
-  drawEdges();
-  if (typeof updateCoords === "function") updateCoords(); // Update red letters
-};
+    document.onmousemove = m => {
+      const canvasDiv = getEl("canvas");
+      if (!canvasDiv) return;
+      const rect = canvasDiv.getBoundingClientRect();
+      el.style.left = (m.pageX - rect.left - offsetX) + "px";
+      el.style.top  = (m.pageY - rect.top  - offsetY) + "px";
+      drawEdges();
+      if (typeof updateCoords === "function") updateCoords();
+    };
     document.onmouseup = () => {
       document.onmousemove = null;
     };
@@ -418,11 +305,11 @@ document.onmousemove = m => {
 }
 
 function startAlgo(type) {
-  if (!startNodeInp.value) return alert("Enter start node");
+  const startNodeInp = getEl("startNode");
+  if (!startNodeInp || !startNodeInp.value) return alert("Enter start node");
   const s = startNodeInp.value.trim().toUpperCase();
   if (!graph[s]) return alert("Node not found");
   
-  // RESET ALL DATA
   history = [];
   visited.clear();
   timeData = {}; 
@@ -432,72 +319,12 @@ function startAlgo(type) {
 
   if (algorithm === "BFS") {
     timeData[s] = { distance: 0, parent: "None" };
-  } else {
   }
 
-  // Initial Action: Discover the start node
   structure = [{ name: s, type: 'discover' }];
-  
   snapshot();
   update();
 }
-
-/*function stepForward() {
-  if (!structure.length) {
-    const remaining = Object.keys(graph).sort().find(v => !visited.has(v));
-    if (!remaining) return; 
-    structure.push(remaining);
-  }
-
-  snapshot();
-  
-  
-  current = (algorithm === "BFS") ? structure.shift() : structure.pop();
-
-  if (!visited.has(current)) {
-    visited.add(current);
-    
-    
-    timer++;
-    if (!timeData[current]) timeData[current] = {};
-    timeData[current].d = timer;
-
-    let neighbors = (graph[current] || [])
-      .map(e => e.to)
-      .filter(v => !visited.has(v))
-      .sort();
-
-    if (algorithm === "DFS") neighbors.reverse();
-
-    neighbors.forEach(v => {
-      if (!structure.includes(v)) {
-        structure.push(v);
-      }
-    });
-    
-    
-    
-    timer++;
-    timeData[current].f = timer;
-  }
-  
-  update();
-  checkFinished();
-}*/
-
-/*function checkFinished() {
-  const remaining = Object.keys(graph).some(v => !visited.has(v));
-
-  if (!remaining && structure.length === 0) {
-    Object.values(nodes).forEach(n => n.classList.remove("current"));
-    Object.keys(nodes).forEach(v => {
-      nodes[v]?.classList.add("visited");
-    });
-
-    statusP.innerText =
-      `${algorithm} Complete. Full Traversal: [${Array.from(visited).join(" -> ")}]`;
-  }
-}*/
 
 function stepForward() {
   if (!structure.length) {
@@ -520,7 +347,7 @@ function stepForward() {
 
     timer++;
     visited.add(name);
-    current = name; // HIGHLIGHT: The node being visited
+    current = name;
 
     if (algorithm === "DFS") {
       timeData[name] = { d: timer };
@@ -539,13 +366,12 @@ function stepForward() {
     }
   } 
   else if (type === 'expand') {
-    current = name; // HIGHLIGHT: Keep focus on Parent while finding kids
+    current = name;
     let neighbors = (graph[name] || [])
       .map(e => e.to)
       .filter(v => !visited.has(v) && !structure.some(s => s.name === v))
       .sort();
 
-    // Add neighbor-check tasks to the FRONT of the queue
     neighbors.reverse().forEach(v => {
       structure.unshift({ name: v, type: 'queue_neighbor', parent: name });
     });
@@ -576,33 +402,28 @@ function stepForward() {
 }
 
 function checkFinished() {
+  const statusP = getEl("status");
   const allVisited = Object.keys(graph).every(v => visited.has(v));
   const stackEmpty = structure.length === 0;
 
   if (allVisited && stackEmpty) {
     Object.values(nodes).forEach(n => n.classList.remove("current"));
-    
-    // Construct the traversal string from the visited Set
-    const traversalOrder = Array.from(visited).join(" -> ");
-    statusP.innerText = `${algorithm} Complete. Full Traversal: [${traversalOrder}]`;
-    
-    update(); // Final render to ensure all finish times are visible
+    const traversal = Array.from(visited).join(" -> ");
+    if (statusP) statusP.innerText = `${algorithm} Complete. Full Traversal: [${traversal}]`;
+    update();
   }
 }
 
 function runToEnd() {
   if (!algorithm) return alert("Select BFS or DFS first");
-  
   const totalNodes = Object.keys(graph).length;
   let safetyNet = 0;
   const maxTicks = totalNodes * 10; 
 
-  
   while (traversalOrder.length < totalNodes && safetyNet < maxTicks) {
     stepForward();
     safetyNet++;
   }
-  
   update(); 
 }
 
@@ -633,55 +454,14 @@ function stepBack() {
   update();
 }
 
-/*function update() {
-  Object.values(nodes).forEach(n => {
-    n.classList.remove("visited", "current");
-    const existingStamp = n.querySelector(".timestamp");
-    if (existingStamp) existingStamp.remove();
-
-    const nodeName = n.textContent;
-    if (timeData[nodeName]) {
-      const d = timeData[nodeName].d ?? "-";
-      const f = timeData[nodeName].f ?? "-";
-      let span = document.createElement("span");
-      span.className = "timestamp";
-      span.textContent = `${d}/${f}`;
-      span.style.cssText = `
-        position: absolute; top: -25px; left: 50%;
-        transform: translateX(-50%); font-size: 13px;
-        font-weight: bold; color: #ff5722; white-space: nowrap;
-        pointer-events: none; text-shadow: 1px 1px 0px #fff;
-      `;
-      n.appendChild(span);
-    }
-  });
-
-  visited.forEach(v => nodes[v]?.classList.add("visited"));
-  if (nodes[current]) nodes[current].classList.add("current");
-
-  
-  
-  const totalNodes = Object.keys(graph).length;
-  const isFinished = (traversalOrder.length === totalNodes && totalNodes > 0);
-
-  if (isFinished) {
-    statusP.innerText = `${algorithm} Complete. Full Traversal: [${traversalOrder.join(" -> ")}]`;
-  } else {
-    statusP.innerText = `${algorithm || "Idle"} | Structure: [${structure.join(", ")}]`;
-  }
-}*/
-
 function update() {
+  const statusP = getEl("status");
   Object.values(nodes).forEach(n => {
     n.classList.remove("visited", "current");
-    
-    // Remove any existing timestamp span to refresh the view
     const existingStamp = n.querySelector(".timestamp");
     if (existingStamp) existingStamp.remove();
 
     const nodeName = n.textContent;
-    
-    // If we have data for this node, create the overlay
     if (timeData[nodeName]) {
       let span = document.createElement("span");
       span.className = "timestamp";
@@ -696,7 +476,6 @@ function update() {
         span.textContent = `${d}/${f}`;
       }
       
-      // Styling to match your previous timestamp look
       span.style.cssText = `
         position: absolute;
         top: -25px;
@@ -715,22 +494,22 @@ function update() {
     }
   });
 
-  // Highlights
   visited.forEach(v => nodes[v]?.classList.add("visited"));
   if (nodes[current]) nodes[current].classList.add("current");
 
-  // Status Bar
   const allVisited = Object.keys(graph).every(v => visited.has(v));
   const stackEmpty = structure.length === 0;
 
-  if (allVisited && stackEmpty && algorithm !== "") {
-    const traversalOrder = Array.from(visited).join(" -> ");
-    statusP.innerText = `${algorithm} Complete. Full Traversal: [${traversalOrder}]`;
-  } else {
-    const structureDisplay = structure.map(item => 
-      typeof item === 'string' ? item : item.name
-    );
-    statusP.innerText = `${algorithm || "Idle"} | Structure: [${structureDisplay.join(", ")}]`;
+  if (statusP) {
+    if (allVisited && stackEmpty && algorithm !== "") {
+      const order = Array.from(visited).join(" -> ");
+      statusP.innerText = `${algorithm} Complete. Full Traversal: [${order}]`;
+    } else {
+      const structureDisplay = structure.map(item => 
+        typeof item === 'string' ? item : item.name
+      );
+      statusP.innerText = `${algorithm || "Idle"} | Structure: [${structureDisplay.join(", ")}]`;
+    }
   }
 }
 
@@ -756,22 +535,11 @@ function exportMatrix() {
   downloadFile("graph_matrix.txt", out);
 }
 
-/*function clearGraph() {
-  graph = {};
-  canvasDiv.querySelectorAll(".node").forEach(n => n.remove());
-  nodes = {};
-  nodeIndex = 0;
-  gridX = 20; gridY = 20;
-  edgesSvg.innerHTML = "";
-  statusP.textContent = "";
-  updateLists();
-}*/
-
 function clearGraph(clearInputs=true) {
-
   graph = {};
   nodes = {};
   edges = [];
+  if (window.edgeBends) window.edgeBends = {};
 
   visited.clear();
   structure = [];
@@ -784,28 +552,122 @@ function clearGraph(clearInputs=true) {
   gridX = 20;
   gridY = 20;
 
-  canvasDiv.querySelectorAll(".node").forEach(n => n.remove());
+  const canvasDiv = getEl("canvas");
+  const edgesSvg = getEl("edges");
+  const statusP = getEl("status");
+  const startNodeInp = getEl("startNode");
+  const listInput = getEl("listInput");
+  const matrixInput = getEl("matrixInput");
 
+  if (canvasDiv) canvasDiv.querySelectorAll(".node").forEach(n => n.remove());
+  if (edgesSvg) edgesSvg.innerHTML = "";
+  if (statusP) statusP.textContent = "";
+  if (startNodeInp) startNodeInp.value = "";
+  updateLists();
+
+  if (clearInputs) {
+    if (listInput) listInput.value = "";
+    if (matrixInput) matrixInput.value = "";
+    if (importListFile) importListFile.value = "";
+    if (importMatrixFile) importMatrixFile.value = "";
+  }
+}
+
+function drawEdges() {
+  const edgesSvg = getEl("edges");
+  if (!edgesSvg) return;
+
+  if (Object.keys(graph).length > MAX_RENDER_NODES) {
+    edgesSvg.innerHTML = "";
+    return;
+  }
+
+  let maxX = 800, maxY = 450;
+  Object.values(nodes).forEach(n => {
+    maxX = Math.max(maxX, n.offsetLeft + 100);
+    maxY = Math.max(maxY, n.offsetTop + 100);
+  });
+
+  edgesSvg.setAttribute("width", maxX);
+  edgesSvg.setAttribute("height", maxY);
   edgesSvg.innerHTML = "";
 
-  vertexList.innerHTML = "";
-  edgeList.innerHTML = "";
-  statusP.textContent = "";
-  startNodeInp.value = "";
+  const SVG_NS = "http://www.w3.org/2000/svg"; 
+  let seenEdges = new Set();
 
- if (clearInputs) {
-  listInput.value = "";
-  matrixInput.value = "";
-  fileInput.value="";
-  importListFile.value = "";
-  importMatrixFile.value = "";
-  importListFile.name="";
-  importMatrixFile.name="";
- }
+  for (let u in graph) {
+    (graph[u] || []).forEach(e => {
+      let v = e.to;
+      let edgeKey = [u, v].sort().join("-");
+      if (seenEdges.has(edgeKey)) return;
+      seenEdges.add(edgeKey);
+
+      if (!nodes[u] || !nodes[v]) return;
+
+      const nodeRadius = window.isMetroMode ? 8 : 22;
+
+      let x1 = nodes[u].offsetLeft + nodeRadius;
+      let y1 = nodes[u].offsetTop + nodeRadius;
+      let x2 = nodes[v].offsetLeft + nodeRadius;
+      let y2 = nodes[v].offsetTop + nodeRadius;
+
+      let path = document.createElementNS(SVG_NS, "path");
+      let d = "";
+      let labelX = (x1 + x2) / 2;
+      let labelY = (y1 + y2) / 2;
+
+      if (window.isMetroMode) {
+        let bend = (window.edgeBends && (window.edgeBends[`${u}-${v}`] || window.edgeBends[`${v}-${u}`])) || null;
+
+        if (bend) {
+          d = `M ${x1} ${y1} L ${bend.x} ${bend.y} L ${x2} ${y2}`;
+          labelX = bend.x;
+          labelY = bend.y;
+        } else {
+          d = `M ${x1} ${y1} L ${x2} ${y2}`;
+        }
+      } else {
+        let midX = (x1 + x2) / 2;
+        let midY = (y1 + y2) / 2;
+        let curviness = 20; 
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        let len = Math.sqrt(dx * dx + dy * dy) || 1;
+
+        let qx = midX + (curviness * -dy) / len;
+        let qy = midY + (curviness * dx) / len;
+
+        d = `M ${x1} ${y1} Q ${qx} ${qy} ${x2} ${y2}`;
+        labelX = qx;
+        labelY = qy;
+      }
+
+      path.setAttribute("d", d);
+      path.setAttribute("stroke", "#555");
+      path.setAttribute("stroke-width", "2.5");
+      path.setAttribute("fill", "transparent");
+      path.setAttribute("stroke-linejoin", "round");
+      edgesSvg.appendChild(path);
+
+      if (e.w !== undefined) {
+        let text = document.createElementNS(SVG_NS, "text");
+        text.setAttribute("x", labelX);
+        text.setAttribute("y", labelY - 5);
+        text.textContent = e.w;
+        text.setAttribute("class", "edge-label");
+        text.setAttribute("text-anchor", "middle");
+        text.style.fontSize = "12px";
+        text.style.fill = "#333";
+        edgesSvg.appendChild(text);
+      }
+    });
+  }
 }
 
 function buildFromList() {
-  
+  const listInput = getEl("listInput");
+  if (!listInput) return;
+
   clearGraph(false);
 
   let lines = listInput.value.trim().split("\n");
@@ -818,34 +680,25 @@ function buildFromList() {
   });
 
   let names = Array.from(namesSet);
-
   placeNodesGrid(names);
 
   lines.forEach(line => {
-
     let [node, neighbors] = line.split(":");
     if (!node) return;
-
     node = node.trim().toUpperCase();
 
     if (!graph[node]) graph[node] = [];
-
     if (!neighbors) return;
 
     neighbors.split(",").forEach(n => {
-
       n = n.trim().toUpperCase();
-
+      if (!n) return;
       if (!graph[n]) graph[n] = [];
-
-      
       if (!graph[node].some(e => e.to === n)) {
-        graph[node].push({to:n,w:1});
-        graph[n].push({to:node,w:1});
+        graph[node].push({ to: n, w: 1 });
+        graph[n].push({ to: node, w: 1 });
       }
-
     });
-
   });
 
   if (names.length <= MAX_RENDER_NODES) {
@@ -856,10 +709,12 @@ function buildFromList() {
 }
 
 function buildFromMatrix() {
+  const matrixInput = getEl("matrixInput");
+  if (!matrixInput) return;
 
   clearGraph(false);
 
-  let rows = matrixInput.value.trim().split("\n");
+  let rows = matrixInput.value.trim().split("\n").filter(r => r.trim().length > 0);
   let size = rows.length;
 
   if (size > MAX_MATRIX_SIZE) {
@@ -868,29 +723,22 @@ function buildFromMatrix() {
 
   let labels = [];
   for (let i = 0; i < size; i++) {
-    labels.push(String.fromCharCode(65 + (i % 26)) + Math.floor(i / 26));
+    labels.push(String.fromCharCode(65 + (i % 26)) + (i >= 26 ? Math.floor(i / 26) : ""));
   }
 
   placeNodesGrid(labels);
 
   for (let i = 0; i < size; i++) {
-
     let cols = rows[i].split(",");
-
     let u = labels[i];
     if (!graph[u]) graph[u] = [];
 
     for (let j = i + 1; j < cols.length; j++) {
-
       if (cols[j].trim() === "1") {
-
         let v = labels[j];
-
         if (!graph[v]) graph[v] = [];
-
         graph[u].push({ to: v, w: 1 });
         graph[v].push({ to: u, w: 1 });
-
       }
     }
   }
@@ -900,28 +748,22 @@ function buildFromMatrix() {
   }
 
   updateLists();
-  
 }
 
 function loadFileIntoBox(fileInput, targetBox) {
-  const file = fileInput.files[0];
-  if (!file) return alert("Select a file first");
+  if (!fileInput || !targetBox) return;
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) return;
 
   const reader = new FileReader();
-
   reader.onload = function(e) {
-    const text = e.target.result;
-
-    setTimeout(() => {
-      targetBox.value = text;
-    }, 0);
+    targetBox.value = e.target.result;
   };
-
   reader.readAsText(file);
 }
 
 function updateCanvasSize(x, y) {
-
+  const edgesSvg = getEl("edges");
   const padding = 100;
 
   let newWidth = Math.max(800, x + padding);
@@ -930,123 +772,106 @@ function updateCanvasSize(x, y) {
   if (newWidth !== canvasWidth || newHeight !== canvasHeight) {
     canvasWidth = newWidth;
     canvasHeight = newHeight;
-
-    edgesSvg.setAttribute("width", canvasWidth);
-    edgesSvg.setAttribute("height", canvasHeight);
+    if (edgesSvg) {
+      edgesSvg.setAttribute("width", canvasWidth);
+      edgesSvg.setAttribute("height", canvasHeight);
+    }
   }
 }
 
-// Check if we are in Manager Mode by looking for a unique button
 function runForceDirected(allAtOnce) {
-    // 1. Get the iteration input element
-    const iterInput = document.getElementById("forceIterations");
-    let currentIterValue = parseInt(iterInput.value) || 0;
+  const iterInput = getEl("forceIterations");
+  if (!iterInput) return;
+  let currentIterValue = parseInt(iterInput.value) || 0;
 
-    // 2. Safety Check: If iterations are 0 or less, stop execution
-    if (currentIterValue <= 0) {
-        console.log("Force Directed Layout: Iteration count is 0. Please increase value.");
-        return; 
+  if (currentIterValue <= 0) return;
+
+  const repulsion = parseFloat(getEl("forceRepulsion")?.value) || 1000;
+  const attraction = parseFloat(getEl("forceAttraction")?.value) || 0.05;
+  const damping = parseFloat(getEl("forceDamping")?.value) || 0.85;
+  
+  let iterationsToRun = allAtOnce ? currentIterValue : 1;
+  iterInput.value = allAtOnce ? 0 : currentIterValue - 1;
+
+  for (let step = 0; step < iterationsToRun; step++) {
+    let forces = {};
+    const nodeKeys = Object.keys(nodes);
+    nodeKeys.forEach(v => forces[v] = { x: 0, y: 0 });
+
+    for (let i = 0; i < nodeKeys.length; i++) {
+      for (let j = i + 1; j < nodeKeys.length; j++) {
+        let u = nodeKeys[i], v = nodeKeys[j];
+        let dx = nodes[v].offsetLeft - nodes[u].offsetLeft;
+        let dy = nodes[v].offsetTop - nodes[u].offsetTop;
+        let distSq = dx * dx + dy * dy || 1;
+        let dist = Math.sqrt(distSq);
+        let f = repulsion / distSq;
+        
+        let fx = (dx / dist) * f;
+        let fy = (dy / dist) * f;
+        forces[u].x -= fx; forces[u].y -= fy;
+        forces[v].x += fx; forces[v].y += fy;
+      }
     }
 
-    const repulsion = parseFloat(document.getElementById("forceRepulsion").value) || 1000;
-    const attraction = parseFloat(document.getElementById("forceAttraction").value) || 0.05;
-    const damping = parseFloat(document.getElementById("forceDamping").value) || 0.85;
-    
-    // 3. Determine how many loops to run and update the input box
-    let iterationsToRun = 1;
-    if (allAtOnce) {
-        iterationsToRun = currentIterValue;
-        iterInput.value = 0; // Set to 0 because we ran them all
-    } else {
-        iterationsToRun = 1;
-        iterInput.value = currentIterValue - 1; // Reduce by one
+    let seenPairs = new Set();
+    for (let u in graph) {
+      if (!graph[u] || !nodes[u]) continue;
+      graph[u].forEach(edge => {
+        let v = edge.to;
+        let pairKey = [u, v].sort().join("-");
+        if (!nodes[v] || seenPairs.has(pairKey)) return;
+        seenPairs.add(pairKey);
+
+        let dx = nodes[v].offsetLeft - nodes[u].offsetLeft;
+        let dy = nodes[v].offsetTop - nodes[u].offsetTop;
+        let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        let f = attraction * dist;
+
+        let fx = (dx / dist) * f;
+        let fy = (dy / dist) * f;
+        forces[u].x -= fx; forces[u].y -= fy;
+        forces[v].x += fx; forces[v].y += fy;
+      });
     }
 
-    // --- Physics Calculation Loop ---
-    for (let i = 0; i < iterationsToRun; i++) {
-        let forces = {};
-        const nodeKeys = Object.keys(nodes);
-        nodeKeys.forEach(v => forces[v] = { x: 0, y: 0 });
+    nodeKeys.forEach(v => {
+      let el = nodes[v];
+      el.style.left = (el.offsetLeft + forces[v].x * damping) + "px";
+      el.style.top = (el.offsetTop + forces[v].y * damping) + "px";
+    });
+  }
 
-        // Repulsion
-        for (let i = 0; i < nodeKeys.length; i++) {
-            for (let j = i + 1; j < nodeKeys.length; j++) {
-                let u = nodeKeys[i], v = nodeKeys[j];
-                let dx = nodes[v].offsetLeft - nodes[u].offsetLeft;
-                let dy = nodes[v].offsetTop - nodes[u].offsetTop;
-                let distSq = dx * dx + dy * dy || 1;
-                let dist = Math.sqrt(distSq);
-                let f = repulsion / distSq;
-                
-                let fx = (dx / dist) * f;
-                let fy = (dy / dist) * f;
-                forces[u].x -= fx; forces[u].y -= fy;
-                forces[v].x += fx; forces[v].y += fy;
-            }
-        }
-
-        // Attraction
-        let seenPairs = new Set();
-        for (let u in graph) {
-            if (!graph[u] || !nodes[u]) continue;
-            graph[u].forEach(edge => {
-                let v = edge.to;
-                let pairKey = [u, v].sort().join("-");
-                if (!nodes[v] || seenPairs.has(pairKey)) return;
-                seenPairs.add(pairKey);
-
-                let dx = nodes[v].offsetLeft - nodes[u].offsetLeft;
-                let dy = nodes[v].offsetTop - nodes[u].offsetTop;
-                let dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                let f = attraction * dist;
-
-                let fx = (dx / dist) * f;
-                let fy = (dy / dist) * f;
-                forces[u].x += fx; forces[u].y += fy;
-                forces[v].x -= fx; forces[v].y -= fy;
-            });
-        }
-
-        // Apply Position Updates
-        nodeKeys.forEach(v => {
-            let el = nodes[v];
-            el.style.left = (el.offsetLeft + forces[v].x * damping) + "px";
-            el.style.top = (el.offsetTop + forces[v].y * damping) + "px";
-        });
-    }
-
-    drawEdges();
-    updateCoords();
+  drawEdges();
+  updateCoords();
 }
 
 function updateCoords() {
-    const runBtn = document.getElementById("runForceAll");
-    if (!runBtn) return; // Only run in manager.html
+  const runBtn = getEl("runForceAll");
+  if (!runBtn) return;
 
-    const listUl = document.getElementById("coordList");
-    if (listUl) listUl.innerHTML = ""; // Clear the bottom list
+  const listUl = getEl("coordList");
+  if (listUl) listUl.innerHTML = "";
 
-    Object.keys(nodes).sort().forEach(v => {
-        let el = nodes[v];
-        let x = Math.round(el.offsetLeft);
-        let y = Math.round(el.offsetTop);
+  Object.keys(nodes).sort().forEach(v => {
+    let el = nodes[v];
+    let x = Math.round(el.offsetLeft);
+    let y = Math.round(el.offsetTop);
 
-        // 1. Update red text above vertex
-        let coordSpan = el.querySelector(".coord-label");
-        if (!coordSpan) {
-            coordSpan = document.createElement("span");
-            coordSpan.className = "coord-label";
-            coordSpan.style.cssText = "position:absolute; top:-15px; font-size:9px; color:red; white-space:nowrap; pointer-events:none;";
-            el.appendChild(coordSpan);
-        }
-        coordSpan.textContent = `(${x}, ${y})`;
+    let coordSpan = el.querySelector(".coord-label");
+    if (!coordSpan) {
+      coordSpan = document.createElement("span");
+      coordSpan.className = "coord-label";
+      coordSpan.style.cssText = "position:absolute; top:-15px; font-size:9px; color:red; white-space:nowrap; pointer-events:none;";
+      el.appendChild(coordSpan);
+    }
+    coordSpan.textContent = `(${x}, ${y})`;
 
-        // 2. Update list below the box
-        if (listUl) {
-            let li = document.createElement("li");
-            li.innerHTML = `<strong>${v}</strong>: x=${x}, y=${y}`;
-            li.style.padding = "2px 0";
-            listUl.appendChild(li);
-        }
-    });
+    if (listUl) {
+      let li = document.createElement("li");
+      li.innerHTML = `<strong>${v}</strong>: x=${x}, y=${y}`;
+      li.style.padding = "2px 0";
+      listUl.appendChild(li);
+    }
+  });
 }

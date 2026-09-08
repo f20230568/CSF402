@@ -10,7 +10,6 @@ button, select, input { margin: 5px; }
   border: 1px solid #999;
   position: relative;
   margin-top: 10px;
-
   overflow: auto;        
 }
 
@@ -18,10 +17,8 @@ button, select, input { margin: 5px; }
   position: absolute;
   top: 0;
   left: 0;
-
   width: auto;
   height: auto;
-
   pointer-events: none;
   z-index: 0;
 }
@@ -41,16 +38,24 @@ button, select, input { margin: 5px; }
   z-index: 1;
 }
 
-.visited { background: lightgreen; }
+/* Metro Map Gender Coloring */
+.node-male {
+  background: #3498db !important; /* Soft Blue */
+  border-color: #1b4f72 !important;
+  color: white !important;
+}
 
-.current { background: orange; }
+.node-female {
+  background: #e91e63 !important; /* Soft Pink / Red-Violet */
+  border-color: #880e4f !important;
+  color: white !important;
+}
+
+.visited { background: lightgreen !important; color: black !important; }
+
+.current { background: orange !important; color: black !important; }
 
 .selected-node {
   box-shadow: 0 0 0 3px #ff9800;
   border-color: #ff9800;
-}
-
-.edge-label {
-  font-size: 12px;
-  fill: black;
 }

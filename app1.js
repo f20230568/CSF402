@@ -25,7 +25,6 @@ let isForceRunning = false;
 
 const STEP = 70;
 
-// Dynamic DOM getter helper to prevent null pointer references across pages
 const getEl = id => document.getElementById(id);
 
 function initAppListeners() {
@@ -46,17 +45,6 @@ function initAppListeners() {
   const importListBtn    = getEl("importListBtn");
   const importMatrixFile = getEl("importMatrixFile");
   const importMatrixBtn  = getEl("importMatrixBtn");
-
-  // Clicking the button triggers the file chooser dialog
-  if (importListBtn && importListFile) {
-    importListBtn.onclick = () => importListFile.click();
-    importListFile.onchange = () => loadFileIntoBox(importListFile, getEl("listInput"));
-  }
-
-  if (importMatrixBtn && importMatrixFile) {
-    importMatrixBtn.onclick = () => importMatrixFile.click();
-    importMatrixFile.onchange = () => loadFileIntoBox(importMatrixFile, getEl("matrixInput"));
-  }
   const toggleForceBtn   = getEl("toggleForceParams");
   const runForceAllBtn   = getEl("runForceAll");
   const runForceStepBtn  = getEl("runForceStep");
@@ -75,11 +63,14 @@ function initAppListeners() {
   if (showListGraphBtn) showListGraphBtn.onclick = () => buildFromList();
   if (showMatrixGraphBtn) showMatrixGraphBtn.onclick = () => buildFromMatrix();
 
-  if (importListBtn) {
-    importListBtn.onclick = () => loadFileIntoBox(getEl("importListFile"), getEl("listInput"));
+  if (importListBtn && importListFile) {
+    importListBtn.onclick = () => importListFile.click();
+    importListFile.onchange = () => loadFileIntoBox(importListFile, getEl("listInput"));
   }
-  if (importMatrixBtn) {
-    importMatrixBtn.onclick = () => loadFileIntoBox(getEl("importMatrixFile"), getEl("matrixInput"));
+
+  if (importMatrixBtn && importMatrixFile) {
+    importMatrixBtn.onclick = () => importMatrixFile.click();
+    importMatrixFile.onchange = () => loadFileIntoBox(importMatrixFile, getEl("matrixInput"));
   }
 
   if (toggleForceBtn) {
@@ -95,7 +86,6 @@ function initAppListeners() {
   if (runForceStepBtn) runForceStepBtn.onclick = () => runForceDirected(false);
 }
 
-// Ensure elements bind reliably on page load
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", initAppListeners);
 } else {
@@ -159,17 +149,12 @@ function selectNode(name) {
       return;
     }
 
-    let weight = prompt("Edge weight?", "1");
-    if (weight === null) {
-      selected = null;
-      return;
-    }
-
+    // Direct unweighted edge creation without prompt
     if (!graph[selected]) graph[selected] = [];
-    graph[selected].push({ to: name, w: weight });
+    graph[selected].push({ to: name });
 
     if (!graph[name]) graph[name] = [];
-    graph[name].push({ to: selected, w: weight });
+    graph[name].push({ to: selected });
 
     selected = null;
     drawEdges();
@@ -558,6 +543,8 @@ function clearGraph(clearInputs=true) {
   const startNodeInp = getEl("startNode");
   const listInput = getEl("listInput");
   const matrixInput = getEl("matrixInput");
+  const importListFile = getEl("importListFile");
+  const importMatrixFile = getEl("importMatrixFile");
 
   if (canvasDiv) canvasDiv.querySelectorAll(".node").forEach(n => n.remove());
   if (edgesSvg) edgesSvg.innerHTML = "";
@@ -613,16 +600,11 @@ function drawEdges() {
 
       let path = document.createElementNS(SVG_NS, "path");
       let d = "";
-      let labelX = (x1 + x2) / 2;
-      let labelY = (y1 + y2) / 2;
 
       if (window.isMetroMode) {
         let bend = (window.edgeBends && (window.edgeBends[`${u}-${v}`] || window.edgeBends[`${v}-${u}`])) || null;
-
         if (bend) {
           d = `M ${x1} ${y1} L ${bend.x} ${bend.y} L ${x2} ${y2}`;
-          labelX = bend.x;
-          labelY = bend.y;
         } else {
           d = `M ${x1} ${y1} L ${x2} ${y2}`;
         }
@@ -638,8 +620,6 @@ function drawEdges() {
         let qy = midY + (curviness * dx) / len;
 
         d = `M ${x1} ${y1} Q ${qx} ${qy} ${x2} ${y2}`;
-        labelX = qx;
-        labelY = qy;
       }
 
       path.setAttribute("d", d);
@@ -648,18 +628,6 @@ function drawEdges() {
       path.setAttribute("fill", "transparent");
       path.setAttribute("stroke-linejoin", "round");
       edgesSvg.appendChild(path);
-
-      if (e.w !== undefined) {
-        let text = document.createElementNS(SVG_NS, "text");
-        text.setAttribute("x", labelX);
-        text.setAttribute("y", labelY - 5);
-        text.textContent = e.w;
-        text.setAttribute("class", "edge-label");
-        text.setAttribute("text-anchor", "middle");
-        text.style.fontSize = "12px";
-        text.style.fill = "#333";
-        edgesSvg.appendChild(text);
-      }
     });
   }
 }
@@ -695,8 +663,8 @@ function buildFromList() {
       if (!n) return;
       if (!graph[n]) graph[n] = [];
       if (!graph[node].some(e => e.to === n)) {
-        graph[node].push({ to: n, w: 1 });
-        graph[n].push({ to: node, w: 1 });
+        graph[node].push({ to: n });
+        graph[n].push({ to: node });
       }
     });
   });
@@ -737,8 +705,8 @@ function buildFromMatrix() {
       if (cols[j].trim() === "1") {
         let v = labels[j];
         if (!graph[v]) graph[v] = [];
-        graph[u].push({ to: v, w: 1 });
-        graph[v].push({ to: u, w: 1 });
+        graph[u].push({ to: v });
+        graph[v].push({ to: u });
       }
     }
   }

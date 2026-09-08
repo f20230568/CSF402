@@ -54,6 +54,28 @@
     font-size: 9px !important;
     font-weight: bold;
   }
+
+  /* Node Colors */
+  .node-male {
+    background: #3498db !important;
+    border-color: #1b4f72 !important;
+    color: white !important;
+  }
+
+  .node-female {
+    background: #e91e63 !important;
+    border-color: #880e4f !important;
+    color: white !important;
+  }
+
+  .legend-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    vertical-align: middle;
+    margin-right: 3px;
+  }
 </style>
 </head>
 
@@ -108,6 +130,11 @@
         <button id="runMetroBtn" onclick="runFamilyMetroMapLayout(parseFloat(document.getElementById('metroAlpha').value))" style="background:#e74c3c; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer;">
           Run Metro Map Layout
         </button>
+        <div style="margin-top: 8px; font-size: 0.85em;">
+          <strong>Legend:</strong>
+          <span class="legend-dot" style="background: #3498db; margin-left: 6px;"></span> Male (Diagonal)
+          <span class="legend-dot" style="background: #e91e63; margin-left: 10px;"></span> Female (Orthogonal)
+        </div>
         <p id="status" style="margin-top: 5px; font-weight: bold;"></p>
     </div>
 

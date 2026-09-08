@@ -240,11 +240,20 @@ function runFamilyMetroMapLayout(alpha = 0.75) {
   const offsetX = minX < 50 ? 50 - minX : 0;
   const offsetY = minY < 50 ? 50 - minY : 0;
 
-  // Apply node positions
+  // Apply node positions and gender colors
   Object.keys(coords).forEach(node => {
     if (nodes[node]) {
       nodes[node].style.left = Math.round(coords[node].x + offsetX) + "px";
       nodes[node].style.top = Math.round(coords[node].y + offsetY) + "px";
+
+      // Color nodes based on MALE / FEMALE
+      const gender = getNodeGender(node);
+      nodes[node].classList.remove("node-male", "node-female");
+      if (gender === "M") {
+        nodes[node].classList.add("node-male");
+      } else {
+        nodes[node].classList.add("node-female");
+      }
     }
   });
 
@@ -262,6 +271,6 @@ function runFamilyMetroMapLayout(alpha = 0.75) {
   if (typeof drawEdges === "function") drawEdges();
   if (typeof updateCoords === "function") updateCoords();
   if (statusElem) {
-    statusElem.innerText = `Family Metro Map layout applied (Root: ${rootNode}, α = ${alpha}).`;
+    statusElem.innerText = `Family Metro Map layout applied (Root: ${rootNode}, α = ${alpha}). Blue = Male, Pink = Female.`;
   }
 }

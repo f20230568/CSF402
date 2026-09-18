@@ -79,6 +79,55 @@ function segmentsIntersect(p1, p2, p3, p4) {
   return (ccw(p1, p3, p4) !== ccw(p2, p3, p4)) && (ccw(p1, p2, p3) !== ccw(p1, p2, p4));
 }
 
+function checkAndListOverlappingVertices(threshold = 16) {
+  const overlapList = getDomEl("overlapList");
+  if (!overlapList) return;
+
+  overlapList.innerHTML = "";
+  const nodeKeys = Object.keys(nodes);
+  const detectedPairs = [];
+
+  for (let i = 0; i < nodeKeys.length; i++) {
+    for (let j = i + 1; j < nodeKeys.length; j++) {
+      const u = nodeKeys[i];
+      const v = nodeKeys[j];
+      if (!nodes[u] || !nodes[v]) continue;
+
+      const x1 = nodes[u].offsetLeft;
+      const y1 = nodes[u].offsetTop;
+      const x2 = nodes[v].offsetLeft;
+      const y2 = nodes[v].offsetTop;
+
+      const dist = Math.hypot(x1 - x2, y1 - y2);
+
+      // Considers nodes overlapping if center distance is within node diameter (16px)
+      if (dist < threshold) {
+        detectedPairs.push({
+          u: u,
+          v: v,
+          dist: Math.round(dist),
+          pos: `(${Math.round(x1)}, ${Math.round(y1)})`
+        });
+      }
+    }
+  }
+
+  if (detectedPairs.length === 0) {
+    const li = document.createElement("li");
+    li.style.color = "#27ae60";
+    li.style.fontWeight = "bold";
+    li.textContent = "None (No overlapping vertices detected)";
+    overlapList.appendChild(li);
+  } else {
+    detectedPairs.forEach(pair => {
+      const li = document.createElement("li");
+      li.style.padding = "3px 0";
+      li.innerHTML = `<strong style="color: #c0392b;">${pair.u}</strong> overlaps with <strong style="color: #c0392b;">${pair.v}</strong> at approx ${pair.pos} (distance: ${pair.dist}px)`;
+      overlapList.appendChild(li);
+    });
+  }
+}
+
 // --- 3. Tree Traversal & Metro Map Coordinate Solver ---
 function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLength = 90) {
   const coords = {};
@@ -270,6 +319,9 @@ function runFamilyMetroMapLayout(alpha = 0.75) {
   // Step 5: Redraw edges
   if (typeof drawEdges === "function") drawEdges();
   if (typeof updateCoords === "function") updateCoords();
+
+  checkAndListOverlappingVertices();
+  
   if (statusElem) {
     statusElem.innerText = `Family Metro Map layout applied (Root: ${rootNode}, α = ${alpha}). Blue = Male, Pink = Female.`;
   }

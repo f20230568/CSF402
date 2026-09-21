@@ -560,7 +560,12 @@ function clearGraph(clearInputs=true) {
   }
 }
 
-function drawEdges() {
+  function drawEdges() {
+  // If on the Area-Adaptive layout page, let areaadaptivetree.js manage orthogonal bus paths
+  if (window.isAreaAdaptiveMode) {
+    return;
+  }
+
   const edgesSvg = getEl("edges");
   if (!edgesSvg) return;
 

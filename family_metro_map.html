@@ -102,11 +102,15 @@
     <div id="listMode" style="display:none">
       <textarea id="listInput" placeholder="A:B,C&#10;B:A,D&#10;C:A&#10;D:B"></textarea><br>
       <button id="showListGraphBtn">Show Graph</button>
+      <input type="file" id="importListFile" accept=".txt">
+      <button id="importListBtn">Import List</button>
     </div>
 
     <div id="matrixMode" style="display:none">
       <textarea id="matrixInput" placeholder="0,1,1&#10;1,0,0&#10;1,0,0"></textarea><br>
       <button id="showMatrixGraphBtn">Show Graph</button>
+      <input type="file" id="importMatrixFile" accept=".txt">
+      <button id="importMatrixBtn">Import Matrix</button>
     </div>
 
     <button id="clearBtn">Clear Graph</button>
@@ -124,7 +128,10 @@
           <input type="number" id="metroAlpha" value="0.75" step="0.05" min="0.1" max="1.0" style="width:60px">
         </label>
         <button id="runMetroBtn" onclick="runFamilyMetroMapLayout(parseFloat(document.getElementById('metroAlpha').value))" style="background:#e74c3c; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer;">
-          Run Metro Map Layout
+          Run Full Metro Layout
+        </button>
+        <button id="stepMetroBtn" onclick="stepBFSMove(parseFloat(document.getElementById('metroAlpha').value))" style="background:#27ae60; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
+          Step by Step BFS Draw
         </button>
         <div style="margin-top: 8px; font-size: 0.85em;">
           <strong>Legend:</strong>
@@ -165,6 +172,12 @@
     </div>
     <p>Successive generations <em>g</em> shrink by factor &alpha; &le; 1 to prevent subtree overlap.</p>
   </div>
+</div>
+
+<!-- BFS Traversal (Layer by Layer) visible directly above the drawing grid -->
+<div id="bfsLayerContainer" style="margin-top: 15px; margin-bottom: 5px; padding: 10px 14px; background: #ffffff; border: 1px solid #b0bec5; border-left: 5px solid #0288d1; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+  <strong style="color: #0277bd; font-size: 13px;">BFS Traversal (Layer by Layer):</strong>
+  <span id="bfsLayersDisplay" style="margin-left: 8px; font-family: monospace; font-size: 13px; color: #263238; font-weight: bold;">[]</span>
 </div>
 
 <div id="canvas">

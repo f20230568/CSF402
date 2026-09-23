@@ -133,6 +133,7 @@ function addNode(nameOpt) {
   if (startNodeInp && !startNodeInp.value) startNodeInp.value = name;
   updateLists();
   updateCanvasSize(gridX, gridY);
+  if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
 }
 
 function selectNode(name) {
@@ -197,6 +198,7 @@ function placeNodesGrid(names) {
 
   nodeIndex = names.length;
   updateCanvasSize(gridX, gridY);
+  if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
 }
 
 function updateLists() {
@@ -253,6 +255,7 @@ function removeVertex() {
 
   drawEdges();
   updateLists();
+  if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
 }
 
 function removeEdge() {
@@ -267,6 +270,7 @@ function removeEdge() {
 
   drawEdges();
   updateLists();
+  if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
 }
 
 function makeDraggable(el) {
@@ -282,9 +286,11 @@ function makeDraggable(el) {
       el.style.top  = (m.pageY - rect.top  - offsetY) + "px";
       drawEdges();
       if (typeof updateCoords === "function") updateCoords();
+      if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
     };
     document.onmouseup = () => {
       document.onmousemove = null;
+      if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
     };
   };
 }
@@ -525,6 +531,7 @@ function clearGraph(clearInputs=true) {
   nodes = {};
   edges = [];
   if (window.edgeBends) window.edgeBends = {};
+  if (window.stepBfsState) window.stepBfsState.active = false;
 
   visited.clear();
   structure = [];
@@ -545,11 +552,13 @@ function clearGraph(clearInputs=true) {
   const matrixInput = getEl("matrixInput");
   const importListFile = getEl("importListFile");
   const importMatrixFile = getEl("importMatrixFile");
+  const bfsDisplayElem = getEl("bfsLayersDisplay");
 
   if (canvasDiv) canvasDiv.querySelectorAll(".node").forEach(n => n.remove());
   if (edgesSvg) edgesSvg.innerHTML = "";
   if (statusP) statusP.textContent = "";
   if (startNodeInp) startNodeInp.value = "";
+  if (bfsDisplayElem) bfsDisplayElem.innerText = "[]";
   updateLists();
 
   if (clearInputs) {
@@ -558,9 +567,14 @@ function clearGraph(clearInputs=true) {
     if (importListFile) importListFile.value = "";
     if (importMatrixFile) importMatrixFile.value = "";
   }
+
+  // Update overlapping vertices on clear
+  if (typeof checkAndListOverlappingVertices === "function") {
+    checkAndListOverlappingVertices();
+  }
 }
 
-  function drawEdges() {
+function drawEdges() {
   // If on the Area-Adaptive layout page, let areaadaptivetree.js manage orthogonal bus paths
   if (window.isAreaAdaptiveMode) {
     return;
@@ -595,6 +609,7 @@ function clearGraph(clearInputs=true) {
       seenEdges.add(edgeKey);
 
       if (!nodes[u] || !nodes[v]) return;
+      if (nodes[u].style.display === "none" || nodes[v].style.display === "none") return;
 
       const nodeRadius = window.isMetroMode ? 8 : 22;
 
@@ -679,6 +694,7 @@ function buildFromList() {
   }
 
   updateLists();
+  if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
 }
 
 function buildFromMatrix() {
@@ -721,6 +737,7 @@ function buildFromMatrix() {
   }
 
   updateLists();
+  if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
 }
 
 function loadFileIntoBox(fileInput, targetBox) {
@@ -817,6 +834,7 @@ function runForceDirected(allAtOnce) {
 
   drawEdges();
   updateCoords();
+  if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
 }
 
 function updateCoords() {

@@ -133,6 +133,9 @@
         <button id="stepMetroBtn" onclick="stepBFSMove(parseFloat(document.getElementById('metroAlpha').value))" style="background:#27ae60; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
           Step by Step BFS Draw
         </button>
+        <button id="fixOverlapsBtn" onclick="fixMetroOverlaps(parseFloat(document.getElementById('metroAlpha').value))" style="background:#2980b9; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
+          Fix Overlaps
+        </button>
         <div style="margin-top: 8px; font-size: 0.85em;">
           <strong>Legend:</strong>
           <span class="legend-dot" style="background: #3498db; margin-left: 6px;"></span> Male (Diagonal)
@@ -188,6 +191,13 @@
   <h3 style="margin: 0 0 8px 0; font-size: 14px; color: #c0392b;">Overlapping Vertices</h3>
   <ul id="overlapList" style="margin: 0; padding-left: 20px; font-size: 13px; color: #333;">
     <li style="color: #7f8c8d;">None (Layout has no overlapping vertices)</li>
+  </ul>
+</div>
+
+<div id="summarySection" style="margin-top: 15px; padding: 12px; border: 1px solid #2980b9; border-radius: 5px; background: #ebf5fb;">
+  <h3 style="margin: 0 0 8px 0; font-size: 14px; color: #1b4f72;">Summary of Changes</h3>
+  <ul id="summaryList" style="margin: 0; padding-left: 20px; font-size: 13px; color: #2c3e50;">
+    <li style="color: #7f8c8d;">No automated adjustments applied.</li>
   </ul>
 </div>
 

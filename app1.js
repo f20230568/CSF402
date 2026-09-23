@@ -134,6 +134,7 @@ function addNode(nameOpt) {
   updateLists();
   updateCanvasSize(gridX, gridY);
   if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
+  if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 }
 
 function selectNode(name) {
@@ -150,7 +151,6 @@ function selectNode(name) {
       return;
     }
 
-    // Direct unweighted edge creation without prompt
     if (!graph[selected]) graph[selected] = [];
     graph[selected].push({ to: name });
 
@@ -199,6 +199,7 @@ function placeNodesGrid(names) {
   nodeIndex = names.length;
   updateCanvasSize(gridX, gridY);
   if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
+  if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 }
 
 function updateLists() {
@@ -256,6 +257,7 @@ function removeVertex() {
   drawEdges();
   updateLists();
   if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
+  if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 }
 
 function removeEdge() {
@@ -271,6 +273,7 @@ function removeEdge() {
   drawEdges();
   updateLists();
   if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
+  if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 }
 
 function makeDraggable(el) {
@@ -287,10 +290,12 @@ function makeDraggable(el) {
       drawEdges();
       if (typeof updateCoords === "function") updateCoords();
       if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
+      if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
     };
     document.onmouseup = () => {
       document.onmousemove = null;
       if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
+      if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
     };
   };
 }
@@ -533,6 +538,14 @@ function clearGraph(clearInputs=true) {
   if (window.edgeBends) window.edgeBends = {};
   if (window.stepBfsState) window.stepBfsState.active = false;
 
+  window.metroOverrides = {
+    edgeScaleFactors: {},
+    genderFlips: {},
+    turnDirections: {},
+    angleOffsets: {}
+  };
+  window.metroChangeSummary = [];
+
   visited.clear();
   structure = [];
   history = [];
@@ -568,14 +581,15 @@ function clearGraph(clearInputs=true) {
     if (importMatrixFile) importMatrixFile.value = "";
   }
 
-  // Update overlapping vertices on clear
   if (typeof checkAndListOverlappingVertices === "function") {
     checkAndListOverlappingVertices();
+  }
+  if (typeof updateSummaryOfChangesSection === "function") {
+    updateSummaryOfChangesSection();
   }
 }
 
 function drawEdges() {
-  // If on the Area-Adaptive layout page, let areaadaptivetree.js manage orthogonal bus paths
   if (window.isAreaAdaptiveMode) {
     return;
   }
@@ -695,6 +709,7 @@ function buildFromList() {
 
   updateLists();
   if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
+  if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 }
 
 function buildFromMatrix() {
@@ -738,6 +753,7 @@ function buildFromMatrix() {
 
   updateLists();
   if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
+  if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 }
 
 function loadFileIntoBox(fileInput, targetBox) {
@@ -835,6 +851,7 @@ function runForceDirected(allAtOnce) {
   drawEdges();
   updateCoords();
   if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
+  if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 }
 
 function updateCoords() {

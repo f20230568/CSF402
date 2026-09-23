@@ -13,16 +13,28 @@ window.stepBfsState = {
   offsets: { x: 0, y: 0 }
 };
 
-// Strategic Overrides for Overlap Resolution
-window.metroOverrides = {
-  edgeScaleFactors: {},   // e.g., "A-E": 0.90
-  genderFlips: {},        // e.g., "E": "F"
-  turnDirections: {},     // e.g., "A-E": -1 or 1
-  angleOffsets: {}        // e.g., "A-E": 4 (180-degree opposite placement)
-};
+// Store overrides and change summaries per root to ensure deterministic replays
+window.metroOverridesByRoot = {};
+window.metroChangeSummaryByRoot = {};
 
-// Summary of automated fixes applied
-window.metroChangeSummary = [];
+function getActiveOverrides(root) {
+  if (!window.metroOverridesByRoot[root]) {
+    window.metroOverridesByRoot[root] = {
+      edgeScaleFactors: {},
+      genderFlips: {},
+      turnDirections: {},
+      angleOffsets: {}
+    };
+  }
+  return window.metroOverridesByRoot[root];
+}
+
+function getActiveSummary(root) {
+  if (!window.metroChangeSummaryByRoot[root]) {
+    window.metroChangeSummaryByRoot[root] = [];
+  }
+  return window.metroChangeSummaryByRoot[root];
+}
 
 // Helper to safely get DOM elements
 function getDomEl(id) {
@@ -78,9 +90,9 @@ function getBaseAngle(k) {
   return (k * Math.PI) / 4;
 }
 
-function getNodeGender(name) {
-  if (window.metroOverrides && window.metroOverrides.genderFlips && window.metroOverrides.genderFlips[name]) {
-    return window.metroOverrides.genderFlips[name].toUpperCase();
+function getNodeGender(name, root = null) {
+  if (root && window.metroOverridesByRoot[root] && window.metroOverridesByRoot[root].genderFlips[name]) {
+    return window.metroOverridesByRoot[root].genderFlips[name].toUpperCase();
   }
   if (nodes[name] && nodes[name].dataset && nodes[name].dataset.gender) {
     return nodes[name].dataset.gender.toUpperCase();
@@ -126,12 +138,12 @@ function computeBFSLayers(rootName) {
   return layers;
 }
 
-function formatBFSLayersColoredHTML(layerArrays) {
+function formatBFSLayersColoredHTML(layerArrays, rootName = null) {
   if (!layerArrays || layerArrays.length === 0) return "[]";
   
   const formattedLayers = layerArrays.map(layer => {
     const nodeSpans = layer.map(name => {
-      const isMale = getNodeGender(name) === "M";
+      const isMale = getNodeGender(name, rootName) === "M";
       const bg = isMale ? "#3498db" : "#e91e63";
       return `<span style="display:inline-block; background:${bg}; color:white; padding:1px 6px; border-radius:3px; margin:1px 2px; font-weight:bold;">${name}</span>`;
     }).join(", ");
@@ -194,18 +206,19 @@ function checkAndListOverlappingVertices(threshold = 16) {
 window.checkAndListOverlappingVertices = checkAndListOverlappingVertices;
 
 // Update Summary of Changes Section
-function updateSummaryOfChangesSection() {
+function updateSummaryOfChangesSection(root = null) {
   const summaryList = getDomEl("summaryList");
   if (!summaryList) return;
 
+  const list = root ? getActiveSummary(root) : [];
   summaryList.innerHTML = "";
-  if (!window.metroChangeSummary || window.metroChangeSummary.length === 0) {
+  if (!list || list.length === 0) {
     const li = document.createElement("li");
     li.style.color = "#7f8c8d";
     li.textContent = "No automated adjustments applied.";
     summaryList.appendChild(li);
   } else {
-    window.metroChangeSummary.forEach(item => {
+    list.forEach(item => {
       const li = document.createElement("li");
       li.style.padding = "2px 0";
       li.innerHTML = item;
@@ -226,7 +239,8 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
   const startY = 220;
   coords[rootName] = { x: startX, y: startY };
   
-  const rootGender = getNodeGender(rootName);
+  const activeOverrides = getActiveOverrides(rootName);
+  const rootGender = getNodeGender(rootName, rootName);
   orientations[rootName] = rootGender === "F" ? 2 : 3;
 
   const visitedNodes = new Set([rootName]);
@@ -244,15 +258,18 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
 
     neighbors.forEach(v => {
       visitedNodes.add(v);
-      const vGender = getNodeGender(v);
+      const vGender = getNodeGender(v, rootName);
 
       const edgeKey = `${u}-${v}`;
       const revKey = `${v}-${u}`;
-      const edgeScale = (window.metroOverrides && (window.metroOverrides.edgeScaleFactors[edgeKey] || window.metroOverrides.edgeScaleFactors[revKey])) || 1.0;
-      const forcedTurn = (window.metroOverrides && (window.metroOverrides.turnDirections[edgeKey] !== undefined ? window.metroOverrides.turnDirections[edgeKey] : window.metroOverrides.turnDirections[revKey])) !== undefined
-        ? (window.metroOverrides.turnDirections[edgeKey] !== undefined ? window.metroOverrides.turnDirections[edgeKey] : window.metroOverrides.turnDirections[revKey])
-        : null;
-      const angleOffset = (window.metroOverrides && (window.metroOverrides.angleOffsets[edgeKey] || window.metroOverrides.angleOffsets[revKey])) || 0;
+      const edgeScale = (activeOverrides.edgeScaleFactors[edgeKey] || activeOverrides.edgeScaleFactors[revKey]) || 1.0;
+      
+      const forcedTurnVal = activeOverrides.turnDirections[edgeKey] !== undefined 
+        ? activeOverrides.turnDirections[edgeKey] 
+        : activeOverrides.turnDirections[revKey];
+      const forcedTurn = forcedTurnVal !== undefined ? forcedTurnVal : null;
+      
+      const angleOffset = (activeOverrides.angleOffsets[edgeKey] || activeOverrides.angleOffsets[revKey]) || 0;
 
       const unitDist = baseSegmentLength * Math.pow(alpha, gen) * edgeScale;
 
@@ -622,7 +639,7 @@ function evaluateLayoutQuality(rootNode, alpha) {
       const d = Math.hypot(coords[u].x - coords[v].x, coords[u].y - coords[v].y);
       if (d < 16) {
         overlapCount++;
-        overlappingPairs.push({ u, v, d });
+        overlappingPairs.push({ u, v, dist: Math.round(d) });
       }
       if (d < minDistance) {
         minDistance = d;
@@ -654,17 +671,18 @@ function fixMetroOverlaps(alpha = 0.75) {
 
   if (!rootNode) return;
 
+  // Establish base layout
   runFamilyMetroMapLayout(alpha);
   let evalRes = evaluateLayoutQuality(rootNode, alpha);
 
   if (evalRes.overlapCount === 0) {
     if (statusElem) statusElem.innerText = "No overlapping vertices detected. Layout is optimal.";
-    window.metroChangeSummary = ["Checked graph: No overlapping vertices were found."];
-    updateSummaryOfChangesSection();
+    window.metroChangeSummaryByRoot[rootNode] = ["Checked graph: No overlapping vertices were found."];
+    updateSummaryOfChangesSection(rootNode);
     return;
   }
 
-  // Build parent mapping via BFS
+  // Build parent mapping using BFS
   const parentMap = {};
   const queue = [rootNode];
   const visited = new Set([rootNode]);
@@ -679,55 +697,58 @@ function fixMetroOverlaps(alpha = 0.75) {
     });
   }
 
-  let bestOverrides = JSON.parse(JSON.stringify(window.metroOverrides));
+  let rootOverrides = getActiveOverrides(rootNode);
+  let bestOverrides = JSON.parse(JSON.stringify(rootOverrides));
   let currentCost = evalRes.cost;
   let summaryLog = [];
 
-  const maxOuterRounds = 12;
+  const maxOuterRounds = 16;
   let outerRound = 0;
 
-  // Continue iterating until all overlaps are eliminated or attempts exhausted
+  // Loop until all overlaps are cleared or search budget exhausted
   while (evalRes.overlapCount > 0 && outerRound < maxOuterRounds) {
     outerRound++;
     let progressMade = false;
 
-    // Collect all unique nodes currently involved in any overlap
-    const nodesToFixSet = new Set();
+    // Target both vertices of every overlapping pair, plus their parents
+    const targetSet = new Set();
     evalRes.overlappingPairs.forEach(pair => {
-      if (pair.u !== rootNode) nodesToFixSet.add(pair.u);
-      if (pair.v !== rootNode) nodesToFixSet.add(pair.v);
+      if (pair.u !== rootNode) targetSet.add(pair.u);
+      if (pair.v !== rootNode) targetSet.add(pair.v);
+      if (parentMap[pair.u] && parentMap[pair.u] !== rootNode) targetSet.add(parentMap[pair.u]);
+      if (parentMap[pair.v] && parentMap[pair.v] !== rootNode) targetSet.add(parentMap[pair.v]);
     });
 
-    const nodesToFix = Array.from(nodesToFixSet);
+    const candidateTargets = Array.from(targetSet);
 
-    for (let targetNode of nodesToFix) {
+    for (let targetNode of candidateTargets) {
       const parentNode = parentMap[targetNode];
       if (!parentNode) continue;
 
       const edgeKey = `${parentNode}-${targetNode}`;
-      let candidateBestOverrides = null;
-      let candidateBestCost = currentCost;
-      let candidateBestAction = null;
+      let nodeBestOverrides = null;
+      let nodeBestCost = currentCost;
+      let nodeBestAction = null;
 
-      // Generate all combination mutations for this node
-      // 1. Angle offsets: 0, 180° (4), +90° (2), -90° (-2), +45° (1), -45° (-1), +135° (3), -135° (-3)
+      // 1. Angular sectors: 180° opposite (4), +90° (2), -90° (-2), +45° (1), -45° (-1), +135° (3), -135° (-3), default (0)
       const angleOffsets = [4, 2, -2, 1, -1, 3, -3, 0];
+
       // 2. Gender choices: Keep current, or flip
-      const currentGender = getNodeGender(targetNode);
+      const currentGender = getNodeGender(targetNode, rootNode);
       const flippedGender = currentGender === "M" ? "F" : "M";
       const genderChoices = [
         { flip: null, label: "" },
         { flip: flippedGender, label: `flipped gender to ${flippedGender}` }
       ];
+
       // 3. Turn directions: null (default heuristic), +1, -1
       const turns = [null, 1, -1];
 
       for (let gChoice of genderChoices) {
         for (let angle of angleOffsets) {
           for (let turn of turns) {
-            // Build mutation state from current best
             const trialOverrides = JSON.parse(JSON.stringify(bestOverrides));
-            
+
             if (angle !== 0) {
               trialOverrides.angleOffsets[edgeKey] = angle;
             } else {
@@ -746,51 +767,49 @@ function fixMetroOverlaps(alpha = 0.75) {
               delete trialOverrides.turnDirections[edgeKey];
             }
 
-            window.metroOverrides = trialOverrides;
+            // CRITICAL FIX: Update the per-root dictionary during evaluation
+            window.metroOverridesByRoot[rootNode] = trialOverrides;
             const trialEval = evaluateLayoutQuality(rootNode, alpha);
 
-            if (trialEval.cost < candidateBestCost) {
-              candidateBestCost = trialEval.cost;
-              candidateBestOverrides = JSON.parse(JSON.stringify(trialOverrides));
-              
+            if (trialEval.cost < nodeBestCost) {
+              nodeBestCost = trialEval.cost;
+              nodeBestOverrides = JSON.parse(JSON.stringify(trialOverrides));
+
               let descParts = [];
               if (angle === 4) descParts.push("placed on opposite side of parent (180°)");
               else if (angle !== 0) descParts.push(`shifted angle by ${angle * 45}°`);
               if (gChoice.flip) descParts.push(gChoice.label);
               if (turn !== null) descParts.push(`inverted bend to ${turn > 0 ? '+45°' : '-45°'}`);
 
-              candidateBestAction = `Relocated vertex <strong>${targetNode}</strong>: ${descParts.join(", ")}.`;
+              nodeBestAction = `Relocated vertex <strong>${targetNode}</strong>: ${descParts.join(", ")}.`;
             }
           }
         }
       }
 
-      // If an improving mutation was found for this node, apply it immediately
-      if (candidateBestOverrides && candidateBestCost < currentCost) {
-        bestOverrides = candidateBestOverrides;
-        currentCost = candidateBestCost;
-        window.metroOverrides = bestOverrides;
+      if (nodeBestOverrides && nodeBestCost < currentCost) {
+        bestOverrides = nodeBestOverrides;
+        currentCost = nodeBestCost;
+        window.metroOverridesByRoot[rootNode] = bestOverrides;
         evalRes = evaluateLayoutQuality(rootNode, alpha);
-        if (candidateBestAction) {
-          summaryLog.push(candidateBestAction);
-        }
+        if (nodeBestAction) summaryLog.push(nodeBestAction);
         progressMade = true;
 
         if (evalRes.overlapCount === 0) break;
       }
     }
 
-    // Fallback: If angular re-routing is blocked, apply micro edge scaling
+    // Secondary fallback: Micro-scale edge adjustment if angle channels are crowded
     if (!progressMade && evalRes.overlapCount > 0) {
-      for (let targetNode of nodesToFix) {
+      for (let targetNode of candidateTargets) {
         const parentNode = parentMap[targetNode];
         if (!parentNode) continue;
         const edgeKey = `${parentNode}-${targetNode}`;
 
-        for (let scale of [0.88, 1.15, 0.78]) {
+        for (let scale of [0.86, 1.14, 0.76]) {
           const trialOverrides = JSON.parse(JSON.stringify(bestOverrides));
           trialOverrides.edgeScaleFactors[edgeKey] = scale;
-          window.metroOverrides = trialOverrides;
+          window.metroOverridesByRoot[rootNode] = trialOverrides;
           const trialEval = evaluateLayoutQuality(rootNode, alpha);
 
           if (trialEval.cost < currentCost) {
@@ -809,10 +828,9 @@ function fixMetroOverlaps(alpha = 0.75) {
     if (!progressMade) break;
   }
 
-  // Commit optimal layout configuration
-  window.metroOverrides = bestOverrides;
+  // Commit best overrides and log
+  window.metroOverridesByRoot[rootNode] = bestOverrides;
 
-  // Check remaining unresolved overlaps and log explicit notice if none could be found
   const finalEval = evaluateLayoutQuality(rootNode, alpha);
   if (finalEval.overlapCount > 0) {
     const unresolvableNodes = new Set();
@@ -825,11 +843,12 @@ function fixMetroOverlaps(alpha = 0.75) {
     });
   }
 
-  window.metroChangeSummary = summaryLog.length > 0 ? summaryLog : ["Checked all radial alternatives; layout cannot be improved further."];
+  window.metroChangeSummaryByRoot[rootNode] = summaryLog.length > 0 ? summaryLog : ["Checked all radial alternatives; layout cannot be improved further."];
 
+  // Re-render and update UI
   runFamilyMetroMapLayout(alpha);
   checkAndListOverlappingVertices();
-  updateSummaryOfChangesSection();
+  updateSummaryOfChangesSection(rootNode);
 
   if (statusElem) {
     if (finalEval.overlapCount === 0) {
@@ -840,3 +859,133 @@ function fixMetroOverlaps(alpha = 0.75) {
   }
 }
 window.fixMetroOverlaps = fixMetroOverlaps;
+
+// --- 7. Save Canvas as JPG (Dynamic Bounding Box) ---
+function saveDrawingAsJPG() {
+  const canvasEl = getDomEl("canvas");
+  const svgEl = getDomEl("edges");
+  if (!canvasEl || !svgEl) return;
+
+  const nodeRadius = 8;
+  const padding = 40;
+
+  // 1. Gather all currently visible nodes
+  const visibleNodes = Object.keys(nodes).filter(
+    k => nodes[k] && nodes[k].style.display !== "none"
+  );
+
+  if (visibleNodes.length === 0) {
+    alert("Nothing to save: no vertices are currently visible.");
+    return;
+  }
+
+  // 2. Compute bounding box encompassing all visible vertices
+  let minX = Infinity, minY = Infinity;
+  let maxX = -Infinity, maxY = -Infinity;
+
+  visibleNodes.forEach(name => {
+    const el = nodes[name];
+    const x = el.offsetLeft;
+    const y = el.offsetTop;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x + nodeRadius * 2);
+    maxY = Math.max(maxY, y + nodeRadius * 2);
+  });
+
+  // Also encompass active edge bends within bounding box
+  if (window.edgeBends) {
+    visibleNodes.forEach(u => {
+      (graph[u] || []).forEach(e => {
+        const v = e.to;
+        if (!visibleNodes.includes(v)) return;
+        const bend = window.edgeBends[`${u}-${v}`] || window.edgeBends[`${v}-${u}`];
+        if (bend) {
+          minX = Math.min(minX, bend.x - nodeRadius);
+          minY = Math.min(minY, bend.y - nodeRadius);
+          maxX = Math.max(maxX, bend.x + nodeRadius);
+          maxY = Math.max(maxY, bend.y + nodeRadius);
+        }
+      });
+    });
+  }
+
+  // Dynamic image dimensions
+  const exportWidth = Math.ceil((maxX - minX) + padding * 2);
+  const exportHeight = Math.ceil((maxY - minY) + padding * 2);
+  const shiftX = padding - minX;
+  const shiftY = padding - minY;
+
+  // 3. Create dynamic offscreen canvas
+  const exportCanvas = document.createElement("canvas");
+  exportCanvas.width = exportWidth;
+  exportCanvas.height = exportHeight;
+  const ctx = exportCanvas.getContext("2d");
+
+  // Fill canvas background with crisp white
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, exportWidth, exportHeight);
+
+  // 4. Draw SVG edges shifted to fit inside canvas bounding box
+  // Clone SVG element to preserve the original on-screen SVG
+  const clonedSvg = svgEl.cloneNode(true);
+  clonedSvg.setAttribute("width", exportWidth);
+  clonedSvg.setAttribute("height", exportHeight);
+
+  // Wrap cloned paths into a group offset by shiftX, shiftY
+  const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  g.setAttribute("transform", `translate(${shiftX}, ${shiftY})`);
+  while (clonedSvg.firstChild) {
+    g.appendChild(clonedSvg.firstChild);
+  }
+  clonedSvg.appendChild(g);
+
+  const svgData = new XMLSerializer().serializeToString(clonedSvg);
+  const svgBlob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(svgBlob);
+  const img = new Image();
+
+  img.onload = function() {
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+
+    // 5. Draw visible vertices on top with offset
+    visibleNodes.forEach(name => {
+      const nodeEl = nodes[name];
+      const cx = nodeEl.offsetLeft + nodeRadius + shiftX;
+      const cy = nodeEl.offsetTop + nodeRadius + shiftY;
+
+      const isMale = nodeEl.classList.contains("node-male");
+      const bgColor = isMale ? "#3498db" : "#e91e63";
+      const borderColor = isMale ? "#1b4f72" : "#880e4f";
+
+      // Outer circle
+      ctx.beginPath();
+      ctx.arc(cx, cy, nodeRadius, 0, Math.PI * 2);
+      ctx.fillStyle = bgColor;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = borderColor;
+      ctx.stroke();
+
+      // Node text label
+      ctx.font = "bold 9px sans-serif";
+      ctx.fillStyle = "#ffffff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(name, cx, cy);
+    });
+
+    // 6. Download the resulting complete JPG
+    const jpgUrl = exportCanvas.toDataURL("image/jpeg", 0.95);
+    const downloadLink = document.createElement("a");
+    downloadLink.download = `metro_map_${new Date().getTime()}.jpg`;
+    downloadLink.href = jpgUrl;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+  };
+
+  img.src = url;
+}
+window.saveDrawingAsJPG = saveDrawingAsJPG;

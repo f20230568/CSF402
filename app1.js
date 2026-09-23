@@ -538,13 +538,8 @@ function clearGraph(clearInputs=true) {
   if (window.edgeBends) window.edgeBends = {};
   if (window.stepBfsState) window.stepBfsState.active = false;
 
-  window.metroOverrides = {
-    edgeScaleFactors: {},
-    genderFlips: {},
-    turnDirections: {},
-    angleOffsets: {}
-  };
-  window.metroChangeSummary = [];
+  window.metroOverridesByRoot = {};
+  window.metroChangeSummaryByRoot = {};
 
   visited.clear();
   structure = [];

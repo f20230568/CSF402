@@ -205,10 +205,15 @@ function checkAndListOverlappingVertices(threshold = 16) {
 }
 window.checkAndListOverlappingVertices = checkAndListOverlappingVertices;
 
-// Update Summary of Changes Section
 function updateSummaryOfChangesSection(root = null) {
   const summaryList = getDomEl("summaryList");
   if (!summaryList) return;
+
+  // Fallback to active startNode if no root is explicitly passed
+  if (!root) {
+    const startNodeInp = getDomEl("startNode");
+    root = (startNodeInp && startNodeInp.value) ? startNodeInp.value.trim().toUpperCase() : Object.keys(graph)[0];
+  }
 
   const list = root ? getActiveSummary(root) : [];
   summaryList.innerHTML = "";
@@ -250,7 +255,7 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
     const { name: u, gen } = queue.shift();
     const uPos = coords[u];
     const uK = orientations[u];
-    const uGender = getNodeGender(u);
+    const uGender = getNodeGender(u, rootName);
 
     const neighbors = (graph[u] || [])
       .map(e => e.to)
@@ -379,7 +384,7 @@ function prepareMetroData(rootNode, alpha) {
 }
 
 // --- 4. Main Controller Function (Instant Draw) ---
-function runFamilyMetroMapLayout(alpha = 0.75) {
+function runFamilyMetroMapLayout(alpha = 0.75, resetOverrides = true) {
   const statusElem = getDomEl("status");
   const startNodeInp = getDomEl("startNode");
   const bfsDisplayElem = getDomEl("bfsLayersDisplay");
@@ -409,11 +414,22 @@ function runFamilyMetroMapLayout(alpha = 0.75) {
     return;
   }
 
+  // Only reset overrides when explicitly executing a fresh baseline draw
+  if (resetOverrides) {
+    window.metroOverridesByRoot[rootNode] = {
+      edgeScaleFactors: {},
+      genderFlips: {},
+      turnDirections: {},
+      angleOffsets: {}
+    };
+    window.metroChangeSummaryByRoot[rootNode] = [];
+  }
+
   window.stepBfsState.active = false;
 
   const bfsLayers = computeBFSLayers(rootNode);
   if (bfsDisplayElem) {
-    bfsDisplayElem.innerHTML = formatBFSLayersColoredHTML(bfsLayers);
+    bfsDisplayElem.innerHTML = formatBFSLayersColoredHTML(bfsLayers, rootNode);
   }
 
   const { coords, bends, offsetX, offsetY } = prepareMetroData(rootNode, alpha);
@@ -425,7 +441,7 @@ function runFamilyMetroMapLayout(alpha = 0.75) {
         nodes[node].style.left = Math.round(coords[node].x + offsetX) + "px";
         nodes[node].style.top = Math.round(coords[node].y + offsetY) + "px";
 
-        const gender = getNodeGender(node);
+        const gender = getNodeGender(node, rootNode);
         nodes[node].classList.remove("node-male", "node-female");
         if (gender === "M") {
           nodes[node].classList.add("node-male");
@@ -449,7 +465,7 @@ function runFamilyMetroMapLayout(alpha = 0.75) {
   if (typeof updateCoords === "function") updateCoords();
 
   checkAndListOverlappingVertices();
-  updateSummaryOfChangesSection();
+  updateSummaryOfChangesSection(rootNode);
   
   if (statusElem) {
     statusElem.innerText = `Family Metro Map layout applied (Root: ${rootNode}, α = ${alpha}). Blue = Male, Pink = Female.`;
@@ -516,7 +532,7 @@ function stepBFSMove(alpha = 0.75) {
 
     if (bfsDisplayElem) bfsDisplayElem.innerHTML = "[]";
     checkAndListOverlappingVertices();
-    updateSummaryOfChangesSection();
+    updateSummaryOfChangesSection(rootNode);
   }
 
   const state = window.stepBfsState;
@@ -524,7 +540,7 @@ function stepBFSMove(alpha = 0.75) {
   if (state.stepIndex >= state.order.length) {
     if (statusElem) statusElem.innerText = "FULL TREE DRAWN";
     checkAndListOverlappingVertices();
-    updateSummaryOfChangesSection();
+    updateSummaryOfChangesSection(rootNode);
     return;
   }
 
@@ -541,7 +557,7 @@ function stepBFSMove(alpha = 0.75) {
   });
 
   if (bfsDisplayElem) {
-    bfsDisplayElem.innerHTML = formatBFSLayersColoredHTML(partialLayers);
+    bfsDisplayElem.innerHTML = formatBFSLayersColoredHTML(partialLayers, rootNode);
   }
 
   if (nodes[currNode] && state.coords[currNode]) {
@@ -549,7 +565,7 @@ function stepBFSMove(alpha = 0.75) {
     nodes[currNode].style.left = Math.round(state.coords[currNode].x + state.offsets.x) + "px";
     nodes[currNode].style.top = Math.round(state.coords[currNode].y + state.offsets.y) + "px";
 
-    const gender = getNodeGender(currNode);
+    const gender = getNodeGender(currNode, rootNode);
     nodes[currNode].classList.remove("node-male", "node-female");
     if (gender === "M") {
       nodes[currNode].classList.add("node-male");
@@ -574,7 +590,7 @@ function stepBFSMove(alpha = 0.75) {
   if (typeof updateCoords === "function") updateCoords();
 
   checkAndListOverlappingVertices();
-  updateSummaryOfChangesSection();
+  updateSummaryOfChangesSection(rootNode);
 
   if (state.stepIndex >= state.order.length) {
     if (statusElem) statusElem.innerText = "FULL TREE DRAWN";
@@ -672,7 +688,7 @@ function fixMetroOverlaps(alpha = 0.75) {
   if (!rootNode) return;
 
   // Establish base layout
-  runFamilyMetroMapLayout(alpha);
+  runFamilyMetroMapLayout(alpha, false);
   let evalRes = evaluateLayoutQuality(rootNode, alpha);
 
   if (evalRes.overlapCount === 0) {
@@ -767,7 +783,6 @@ function fixMetroOverlaps(alpha = 0.75) {
               delete trialOverrides.turnDirections[edgeKey];
             }
 
-            // CRITICAL FIX: Update the per-root dictionary during evaluation
             window.metroOverridesByRoot[rootNode] = trialOverrides;
             const trialEval = evaluateLayoutQuality(rootNode, alpha);
 
@@ -845,8 +860,8 @@ function fixMetroOverlaps(alpha = 0.75) {
 
   window.metroChangeSummaryByRoot[rootNode] = summaryLog.length > 0 ? summaryLog : ["Checked all radial alternatives; layout cannot be improved further."];
 
-  // Re-render and update UI
-  runFamilyMetroMapLayout(alpha);
+  // Re-render and update UI with the overrides applied
+  runFamilyMetroMapLayout(alpha, false);
   checkAndListOverlappingVertices();
   updateSummaryOfChangesSection(rootNode);
 
@@ -927,12 +942,10 @@ function saveDrawingAsJPG() {
   ctx.fillRect(0, 0, exportWidth, exportHeight);
 
   // 4. Draw SVG edges shifted to fit inside canvas bounding box
-  // Clone SVG element to preserve the original on-screen SVG
   const clonedSvg = svgEl.cloneNode(true);
   clonedSvg.setAttribute("width", exportWidth);
   clonedSvg.setAttribute("height", exportHeight);
 
-  // Wrap cloned paths into a group offset by shiftX, shiftY
   const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
   g.setAttribute("transform", `translate(${shiftX}, ${shiftY})`);
   while (clonedSvg.firstChild) {
@@ -959,7 +972,6 @@ function saveDrawingAsJPG() {
       const bgColor = isMale ? "#3498db" : "#e91e63";
       const borderColor = isMale ? "#1b4f72" : "#880e4f";
 
-      // Outer circle
       ctx.beginPath();
       ctx.arc(cx, cy, nodeRadius, 0, Math.PI * 2);
       ctx.fillStyle = bgColor;
@@ -968,7 +980,6 @@ function saveDrawingAsJPG() {
       ctx.strokeStyle = borderColor;
       ctx.stroke();
 
-      // Node text label
       ctx.font = "bold 9px sans-serif";
       ctx.fillStyle = "#ffffff";
       ctx.textAlign = "center";

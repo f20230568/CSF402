@@ -290,12 +290,12 @@ function makeDraggable(el) {
       drawEdges();
       if (typeof updateCoords === "function") updateCoords();
       if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
-      if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
+      //if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
     };
     document.onmouseup = () => {
       document.onmousemove = null;
       if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
-      if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
+      //if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
     };
   };
 }

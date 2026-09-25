@@ -100,6 +100,64 @@ function getNodeGender(name, root = null) {
   return name.charCodeAt(0) % 2 === 0 ? "F" : "M";
 }
 
+// Point-to-segment distance helper
+function distToSegmentSquared(p, v, w) {
+  const l2 = (v.x - w.x) ** 2 + (v.y - w.y) ** 2;
+  if (l2 === 0) return (p.x - v.x) ** 2 + (p.y - v.y) ** 2;
+  let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return (p.x - (v.x + t * (w.x - v.x))) ** 2 + (p.y - (v.y + t * (w.y - v.y))) ** 2;
+}
+
+function distToSegment(p, v, w) {
+  return Math.sqrt(distToSegmentSquared(p, v, w));
+}
+
+// Detect edge overlap, collinearity, crossing, or touching between two segments
+function edgeSegmentsOverlapOrTouch(p1, p2, p3, p4, tolerance = 6.0) {
+  function ccw(A, B, C) {
+    return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
+  }
+
+  const shareEndpoint = (
+    (Math.hypot(p1.x - p3.x, p1.y - p3.y) < 1.0) ||
+    (Math.hypot(p1.x - p4.x, p1.y - p4.y) < 1.0) ||
+    (Math.hypot(p2.x - p3.x, p2.y - p3.y) < 1.0) ||
+    (Math.hypot(p2.x - p4.x, p2.y - p4.y) < 1.0)
+  );
+
+  // If they cross and do not share an endpoint
+  if (!shareEndpoint) {
+    const intersect = (ccw(p1, p3, p4) !== ccw(p2, p3, p4)) && (ccw(p1, p2, p3) !== ccw(p1, p2, p4));
+    if (intersect) return true;
+  }
+
+  // Check if segments are collinear or one grazes/touches the other
+  if (shareEndpoint) {
+    // Check if lines shoot in the exact same direction from the shared point (collinear overlap)
+    let common, other1, other2;
+    if (Math.hypot(p1.x - p3.x, p1.y - p3.y) < 1.0) { common = p1; other1 = p2; other2 = p4; }
+    else if (Math.hypot(p1.x - p4.x, p1.y - p4.y) < 1.0) { common = p1; other1 = p2; other2 = p3; }
+    else if (Math.hypot(p2.x - p3.x, p2.y - p3.y) < 1.0) { common = p2; other1 = p1; other2 = p4; }
+    else { common = p2; other1 = p1; other2 = p3; }
+
+    const angle1 = Math.atan2(other1.y - common.y, other1.x - common.x);
+    const angle2 = Math.atan2(other2.y - common.y, other2.x - common.x);
+    let diff = Math.abs(angle1 - angle2);
+    if (diff > Math.PI) diff = 2 * Math.PI - diff;
+    if (diff < 0.05) return true; // collinear duplicate ray
+    return false;
+  }
+
+  // Non-endpoint minimum distance between segments (touching or grazing)
+  const d1 = distToSegment(p1, p3, p4);
+  const d2 = distToSegment(p2, p3, p4);
+  const d3 = distToSegment(p3, p1, p2);
+  const d4 = distToSegment(p4, p1, p2);
+
+  return Math.min(d1, d2, d3, d4) < tolerance;
+}
+
 function segmentsIntersect(p1, p2, p3, p4) {
   function ccw(A, B, C) {
     return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
@@ -205,11 +263,69 @@ function checkAndListOverlappingVertices(threshold = 16) {
 }
 window.checkAndListOverlappingVertices = checkAndListOverlappingVertices;
 
+// Overlapping or Touching Edges Detection
+function checkAndListEdgeOverlaps(rootNode = null) {
+  const edgeListEl = getDomEl("edgeOverlapList");
+  if (!edgeListEl) return [];
+
+  edgeListEl.innerHTML = "";
+  if (!rootNode) {
+    const startNodeInp = getDomEl("startNode");
+    rootNode = (startNodeInp && startNodeInp.value) ? startNodeInp.value.trim().toUpperCase() : Object.keys(graph)[0];
+  }
+
+  if (!rootNode || !graph[rootNode]) {
+    const li = document.createElement("li");
+    li.style.color = "#7f8c8d";
+    li.textContent = "None (No edge collisions detected)";
+    edgeListEl.appendChild(li);
+    return [];
+  }
+
+  const alpha = parseFloat(getDomEl("metroAlpha")?.value || "0.75");
+  const { linesDrawn } = generateFamilyMetroCoordinates(rootNode, alpha, 90);
+  const detectedCollisions = [];
+
+  for (let i = 0; i < linesDrawn.length; i++) {
+    for (let j = i + 1; j < linesDrawn.length; j++) {
+      const s1 = linesDrawn[i];
+      const s2 = linesDrawn[j];
+      if (s1.edgeKey === s2.edgeKey) continue;
+
+      if (edgeSegmentsOverlapOrTouch(s1.p1, s1.p2, s2.p1, s2.p2, 6.0)) {
+        detectedCollisions.push({
+          edge1: s1.edgeKey,
+          edge2: s2.edgeKey,
+          u1: s1.u, v1: s1.v,
+          u2: s2.u, v2: s2.v
+        });
+      }
+    }
+  }
+
+  if (detectedCollisions.length === 0) {
+    const li = document.createElement("li");
+    li.style.color = "#27ae60";
+    li.style.fontWeight = "bold";
+    li.textContent = "None (No edge collisions or touching lines detected)";
+    edgeListEl.appendChild(li);
+  } else {
+    detectedCollisions.forEach(item => {
+      const li = document.createElement("li");
+      li.style.padding = "3px 0";
+      li.innerHTML = `Edge <strong style="color: #d35400;">${item.edge1}</strong> collides/touches edge <strong style="color: #d35400;">${item.edge2}</strong>`;
+      edgeListEl.appendChild(li);
+    });
+  }
+
+  return detectedCollisions;
+}
+window.checkAndListEdgeOverlaps = checkAndListEdgeOverlaps;
+
 function updateSummaryOfChangesSection(root = null) {
   const summaryList = getDomEl("summaryList");
   if (!summaryList) return;
 
-  // Fallback to active startNode if no root is explicitly passed
   if (!root) {
     const startNodeInp = getDomEl("startNode");
     root = (startNodeInp && startNodeInp.value) ? startNodeInp.value.trim().toUpperCase() : Object.keys(graph)[0];
@@ -292,15 +408,19 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
         let bendPt = null;
 
         if (uGender === vGender) {
-          // Straight link
-          nextK = (baseK + (turn > 0 ? 0 : 0)) % 8;
+          /*nextK = (baseK + (turn > 0 ? 0 : 0)) % 8;
+          const rad = getBaseAngle(nextK);
+          pNext = {
+            x: uPos.x + unitDist * Math.cos(rad),
+            y: uPos.y + unitDist * Math.sin(rad)
+          };*/
+          nextK = (baseK + (turn < 0 ? 4 : 0) + 8) % 8;
           const rad = getBaseAngle(nextK);
           pNext = {
             x: uPos.x + unitDist * Math.cos(rad),
             y: uPos.y + unitDist * Math.sin(rad)
           };
         } else {
-          // Bended link (45-degree angle transition)
           const bendedSegmentLen = unitDist / Math.sqrt(2 + Math.sqrt(2));
           const bendAngle = getBaseAngle((baseK + turn + 8) % 8);
           bendPt = {
@@ -350,11 +470,12 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
         localBends[`${u}-${v}`] = bestBend;
       }
       
+      const canonicalKey = [u, v].sort().join("-");
       if (bestBend) {
-        linesDrawn.push({ p1: uPos, p2: bestBend });
-        linesDrawn.push({ p1: bestBend, p2: bestPos });
+        linesDrawn.push({ p1: uPos, p2: bestBend, edgeKey: canonicalKey, u, v });
+        linesDrawn.push({ p1: bestBend, p2: bestPos, edgeKey: canonicalKey, u, v });
       } else {
-        linesDrawn.push({ p1: uPos, p2: bestPos });
+        linesDrawn.push({ p1: uPos, p2: bestPos, edgeKey: canonicalKey, u, v });
       }
       queue.push({ name: v, gen: gen + 1 });
     });
@@ -395,6 +516,7 @@ function runFamilyMetroMapLayout(alpha = 0.75, resetOverrides = true) {
     if (statusElem) statusElem.innerText = "Error: Input graph is not a valid tree.";
     if (bfsDisplayElem) bfsDisplayElem.innerHTML = "[]";
     checkAndListOverlappingVertices();
+    checkAndListEdgeOverlaps();
     updateSummaryOfChangesSection();
     return;
   }
@@ -410,11 +532,11 @@ function runFamilyMetroMapLayout(alpha = 0.75, resetOverrides = true) {
   if (!rootNode) {
     alert("Please add vertices to build a tree.");
     checkAndListOverlappingVertices();
+    checkAndListEdgeOverlaps();
     updateSummaryOfChangesSection();
     return;
   }
 
-  // Only reset overrides when explicitly executing a fresh baseline draw
   if (resetOverrides) {
     window.metroOverridesByRoot[rootNode] = {
       edgeScaleFactors: {},
@@ -465,6 +587,7 @@ function runFamilyMetroMapLayout(alpha = 0.75, resetOverrides = true) {
   if (typeof updateCoords === "function") updateCoords();
 
   checkAndListOverlappingVertices();
+  checkAndListEdgeOverlaps(rootNode);
   updateSummaryOfChangesSection(rootNode);
   
   if (statusElem) {
@@ -483,6 +606,7 @@ function stepBFSMove(alpha = 0.75) {
     alert("Family Metro Map Error: " + check.reason);
     if (statusElem) statusElem.innerText = "Error: Input graph is not a valid tree.";
     checkAndListOverlappingVertices();
+    checkAndListEdgeOverlaps();
     updateSummaryOfChangesSection();
     return;
   }
@@ -498,6 +622,7 @@ function stepBFSMove(alpha = 0.75) {
   if (!rootNode) {
     alert("Please add vertices to build a tree.");
     checkAndListOverlappingVertices();
+    checkAndListEdgeOverlaps();
     updateSummaryOfChangesSection();
     return;
   }
@@ -532,6 +657,7 @@ function stepBFSMove(alpha = 0.75) {
 
     if (bfsDisplayElem) bfsDisplayElem.innerHTML = "[]";
     checkAndListOverlappingVertices();
+    checkAndListEdgeOverlaps(rootNode);
     updateSummaryOfChangesSection(rootNode);
   }
 
@@ -540,6 +666,7 @@ function stepBFSMove(alpha = 0.75) {
   if (state.stepIndex >= state.order.length) {
     if (statusElem) statusElem.innerText = "FULL TREE DRAWN";
     checkAndListOverlappingVertices();
+    checkAndListEdgeOverlaps(rootNode);
     updateSummaryOfChangesSection(rootNode);
     return;
   }
@@ -590,6 +717,7 @@ function stepBFSMove(alpha = 0.75) {
   if (typeof updateCoords === "function") updateCoords();
 
   checkAndListOverlappingVertices();
+  checkAndListEdgeOverlaps(rootNode);
   updateSummaryOfChangesSection(rootNode);
 
   if (state.stepIndex >= state.order.length) {
@@ -641,7 +769,7 @@ function drawPartialMetroEdges(visibleSet) {
   }
 }
 
-// Layout Evaluation Metric: strictly penalizes overlaps and crossings, rewards spacing
+// Layout Evaluation Metric: strictly penalizes vertex overlaps, edge crossings, and touching lines
 function evaluateLayoutQuality(rootNode, alpha) {
   const { coords, bends, linesDrawn } = generateFamilyMetroCoordinates(rootNode, alpha, 90);
   const nodeKeys = Object.keys(coords);
@@ -664,19 +792,25 @@ function evaluateLayoutQuality(rootNode, alpha) {
   }
 
   let lineIntersections = 0;
+  const collidingEdgePairs = [];
   for (let i = 0; i < linesDrawn.length; i++) {
     for (let j = i + 1; j < linesDrawn.length; j++) {
-      if (segmentsIntersect(linesDrawn[i].p1, linesDrawn[i].p2, linesDrawn[j].p1, linesDrawn[j].p2)) {
+      const s1 = linesDrawn[i];
+      const s2 = linesDrawn[j];
+      if (s1.edgeKey === s2.edgeKey) continue;
+
+      if (edgeSegmentsOverlapOrTouch(s1.p1, s1.p2, s2.p1, s2.p2, 6.0)) {
         lineIntersections++;
+        collidingEdgePairs.push({ s1, s2 });
       }
     }
   }
 
-  const cost = (overlapCount * 100000) + (lineIntersections * 2000) - (minDistance === Infinity ? 0 : minDistance);
-  return { cost, overlapCount, lineIntersections, minDistance, overlappingPairs, coords, bends };
+  const cost = (overlapCount * 100000) + (lineIntersections * 5000) - (minDistance === Infinity ? 0 : minDistance);
+  return { cost, overlapCount, lineIntersections, minDistance, overlappingPairs, collidingEdgePairs, coords, bends, linesDrawn };
 }
 
-// --- 6. Multi-Strategy Overlap Optimization Engine (All Overlaps) ---
+// --- 6A. Fix Vertex Overlaps ---
 function fixMetroOverlaps(alpha = 0.75) {
   const statusElem = getDomEl("status");
   const startNodeInp = getDomEl("startNode");
@@ -687,7 +821,6 @@ function fixMetroOverlaps(alpha = 0.75) {
 
   if (!rootNode) return;
 
-  // Establish base layout
   runFamilyMetroMapLayout(alpha, false);
   let evalRes = evaluateLayoutQuality(rootNode, alpha);
 
@@ -698,7 +831,6 @@ function fixMetroOverlaps(alpha = 0.75) {
     return;
   }
 
-  // Build parent mapping using BFS
   const parentMap = {};
   const queue = [rootNode];
   const visited = new Set([rootNode]);
@@ -721,12 +853,10 @@ function fixMetroOverlaps(alpha = 0.75) {
   const maxOuterRounds = 16;
   let outerRound = 0;
 
-  // Loop until all overlaps are cleared or search budget exhausted
   while (evalRes.overlapCount > 0 && outerRound < maxOuterRounds) {
     outerRound++;
     let progressMade = false;
 
-    // Target both vertices of every overlapping pair, plus their parents
     const targetSet = new Set();
     evalRes.overlappingPairs.forEach(pair => {
       if (pair.u !== rootNode) targetSet.add(pair.u);
@@ -746,18 +876,13 @@ function fixMetroOverlaps(alpha = 0.75) {
       let nodeBestCost = currentCost;
       let nodeBestAction = null;
 
-      // 1. Angular sectors: 180° opposite (4), +90° (2), -90° (-2), +45° (1), -45° (-1), +135° (3), -135° (-3), default (0)
       const angleOffsets = [4, 2, -2, 1, -1, 3, -3, 0];
-
-      // 2. Gender choices: Keep current, or flip
       const currentGender = getNodeGender(targetNode, rootNode);
       const flippedGender = currentGender === "M" ? "F" : "M";
       const genderChoices = [
         { flip: null, label: "" },
         { flip: flippedGender, label: `flipped gender to ${flippedGender}` }
       ];
-
-      // 3. Turn directions: null (default heuristic), +1, -1
       const turns = [null, 1, -1];
 
       for (let gChoice of genderChoices) {
@@ -765,23 +890,14 @@ function fixMetroOverlaps(alpha = 0.75) {
           for (let turn of turns) {
             const trialOverrides = JSON.parse(JSON.stringify(bestOverrides));
 
-            if (angle !== 0) {
-              trialOverrides.angleOffsets[edgeKey] = angle;
-            } else {
-              delete trialOverrides.angleOffsets[edgeKey];
-            }
+            if (angle !== 0) trialOverrides.angleOffsets[edgeKey] = angle;
+            else delete trialOverrides.angleOffsets[edgeKey];
 
-            if (gChoice.flip) {
-              trialOverrides.genderFlips[targetNode] = gChoice.flip;
-            } else {
-              delete trialOverrides.genderFlips[targetNode];
-            }
+            if (gChoice.flip) trialOverrides.genderFlips[targetNode] = gChoice.flip;
+            else delete trialOverrides.genderFlips[targetNode];
 
-            if (turn !== null) {
-              trialOverrides.turnDirections[edgeKey] = turn;
-            } else {
-              delete trialOverrides.turnDirections[edgeKey];
-            }
+            if (turn !== null) trialOverrides.turnDirections[edgeKey] = turn;
+            else delete trialOverrides.turnDirections[edgeKey];
 
             window.metroOverridesByRoot[rootNode] = trialOverrides;
             const trialEval = evaluateLayoutQuality(rootNode, alpha);
@@ -809,12 +925,10 @@ function fixMetroOverlaps(alpha = 0.75) {
         evalRes = evaluateLayoutQuality(rootNode, alpha);
         if (nodeBestAction) summaryLog.push(nodeBestAction);
         progressMade = true;
-
         if (evalRes.overlapCount === 0) break;
       }
     }
 
-    // Secondary fallback: Micro-scale edge adjustment if angle channels are crowded
     if (!progressMade && evalRes.overlapCount > 0) {
       for (let targetNode of candidateTargets) {
         const parentNode = parentMap[targetNode];
@@ -831,7 +945,7 @@ function fixMetroOverlaps(alpha = 0.75) {
             currentCost = trialEval.cost;
             bestOverrides = trialOverrides;
             evalRes = trialEval;
-            summaryLog.push(`Scaled branch (<strong>${parentNode} → ${targetNode}</strong>) by <strong>${scale}×</strong> to clear spacing.`);
+            summaryLog.push(`Scaled branch (<strong>${parentNode} → ${targetNode}</strong>) by <strong>${scale}×</strong> to clear vertex overlap.`);
             progressMade = true;
             break;
           }
@@ -843,7 +957,6 @@ function fixMetroOverlaps(alpha = 0.75) {
     if (!progressMade) break;
   }
 
-  // Commit best overrides and log
   window.metroOverridesByRoot[rootNode] = bestOverrides;
 
   const finalEval = evaluateLayoutQuality(rootNode, alpha);
@@ -854,26 +967,201 @@ function fixMetroOverlaps(alpha = 0.75) {
       unresolvableNodes.add(p.v);
     });
     unresolvableNodes.forEach(node => {
-      summaryLog.push(`<span style="color:#c0392b;">Could not resolve overlap for vertex <strong>${node}</strong>: no collision-free octilinear sector available.</span>`);
+      summaryLog.push(`<span style="color:#c0392b;">Could not resolve vertex overlap for <strong>${node}</strong>: no collision-free octilinear sector available.</span>`);
     });
   }
 
-  window.metroChangeSummaryByRoot[rootNode] = summaryLog.length > 0 ? summaryLog : ["Checked all radial alternatives; layout cannot be improved further."];
+  window.metroChangeSummaryByRoot[rootNode] = summaryLog.length > 0 ? summaryLog : ["Checked all radial alternatives; vertex layout cannot be improved further."];
 
-  // Re-render and update UI with the overrides applied
   runFamilyMetroMapLayout(alpha, false);
   checkAndListOverlappingVertices();
+  checkAndListEdgeOverlaps(rootNode);
   updateSummaryOfChangesSection(rootNode);
 
   if (statusElem) {
     if (finalEval.overlapCount === 0) {
-      statusElem.innerText = `All overlaps fixed! (Applied ${summaryLog.length} geometric adjustments).`;
+      statusElem.innerText = `All vertex overlaps fixed! (Applied ${summaryLog.length} geometric adjustments).`;
     } else {
       statusElem.innerText = `Partial resolution applied. Remaining overlapping vertices: ${finalEval.overlapCount}.`;
     }
   }
 }
 window.fixMetroOverlaps = fixMetroOverlaps;
+
+// --- 6B. Fix Edge Overlaps, Grazing, and Touching Lines ---
+function fixMetroEdgeOverlaps(alpha = 0.75) {
+  const statusElem = getDomEl("status");
+  const startNodeInp = getDomEl("startNode");
+
+  let rootNode = (startNodeInp && startNodeInp.value && graph[startNodeInp.value.trim().toUpperCase()])
+    ? startNodeInp.value.trim().toUpperCase()
+    : Object.keys(graph)[0];
+
+  if (!rootNode) return;
+
+  runFamilyMetroMapLayout(alpha, false);
+  let evalRes = evaluateLayoutQuality(rootNode, alpha);
+
+  if (evalRes.lineIntersections === 0) {
+    if (statusElem) statusElem.innerText = "No edge collisions, touching lines, or overlaps detected.";
+    window.metroChangeSummaryByRoot[rootNode] = ["Checked graph: No overlapping or touching edges found."];
+    updateSummaryOfChangesSection(rootNode);
+    return;
+  }
+
+  const parentMap = {};
+  const queue = [rootNode];
+  const visited = new Set([rootNode]);
+  while (queue.length > 0) {
+    const u = queue.shift();
+    (graph[u] || []).forEach(e => {
+      if (!visited.has(e.to)) {
+        visited.add(e.to);
+        parentMap[e.to] = u;
+        queue.push(e.to);
+      }
+    });
+  }
+
+  let rootOverrides = getActiveOverrides(rootNode);
+  let bestOverrides = JSON.parse(JSON.stringify(rootOverrides));
+  let currentCost = evalRes.cost;
+  let summaryLog = [];
+
+  const maxOuterRounds = 16;
+  let outerRound = 0;
+
+  while (evalRes.lineIntersections > 0 && outerRound < maxOuterRounds) {
+    outerRound++;
+    let progressMade = false;
+
+    // Collect endpoints of colliding edges
+    const targetSet = new Set();
+    evalRes.collidingEdgePairs.forEach(pair => {
+      [pair.s1.u, pair.s1.v, pair.s2.u, pair.s2.v].forEach(n => {
+        if (n !== rootNode) targetSet.add(n);
+        if (parentMap[n] && parentMap[n] !== rootNode) targetSet.add(parentMap[n]);
+      });
+    });
+
+    const candidateTargets = Array.from(targetSet);
+
+    for (let targetNode of candidateTargets) {
+      const parentNode = parentMap[targetNode];
+      if (!parentNode) continue;
+
+      const edgeKey = `${parentNode}-${targetNode}`;
+      let nodeBestOverrides = null;
+      let nodeBestCost = currentCost;
+      let nodeBestAction = null;
+
+      // Strategies: Alternative angle sectors, gender toggling, bend flips, scale tweaks
+      const angleOffsets = [2, -2, 4, 1, -1, 3, -3, 0];
+      const currentGender = getNodeGender(targetNode, rootNode);
+      const flippedGender = currentGender === "M" ? "F" : "M";
+      const genderChoices = [
+        { flip: null, label: "" },
+        { flip: flippedGender, label: `flipped gender to ${flippedGender}` }
+      ];
+      const turns = [null, 1, -1];
+
+      for (let gChoice of genderChoices) {
+        for (let angle of angleOffsets) {
+          for (let turn of turns) {
+            const trialOverrides = JSON.parse(JSON.stringify(bestOverrides));
+
+            if (angle !== 0) trialOverrides.angleOffsets[edgeKey] = angle;
+            else delete trialOverrides.angleOffsets[edgeKey];
+
+            if (gChoice.flip) trialOverrides.genderFlips[targetNode] = gChoice.flip;
+            else delete trialOverrides.genderFlips[targetNode];
+
+            if (turn !== null) trialOverrides.turnDirections[edgeKey] = turn;
+            else delete trialOverrides.turnDirections[edgeKey];
+
+            window.metroOverridesByRoot[rootNode] = trialOverrides;
+            const trialEval = evaluateLayoutQuality(rootNode, alpha);
+
+            // Must improve cost and not introduce vertex overlaps
+            if (trialEval.cost < nodeBestCost && trialEval.overlapCount <= evalRes.overlapCount) {
+              nodeBestCost = trialEval.cost;
+              nodeBestOverrides = JSON.parse(JSON.stringify(trialOverrides));
+
+              let descParts = [];
+              if (angle === 4) descParts.push("re-routed to opposite side (180°)");
+              else if (angle !== 0) descParts.push(`shifted sector by ${angle * 45}°`);
+              if (gChoice.flip) descParts.push(gChoice.label);
+              if (turn !== null) descParts.push(`flipped bend to ${turn > 0 ? '+45°' : '-45°'}`);
+
+              nodeBestAction = `Resolved edge collision on (<strong>${parentNode} → ${targetNode}</strong>): ${descParts.join(", ")}.`;
+            }
+          }
+        }
+      }
+
+      if (nodeBestOverrides && nodeBestCost < currentCost) {
+        bestOverrides = nodeBestOverrides;
+        currentCost = nodeBestCost;
+        window.metroOverridesByRoot[rootNode] = bestOverrides;
+        evalRes = evaluateLayoutQuality(rootNode, alpha);
+        if (nodeBestAction) summaryLog.push(nodeBestAction);
+        progressMade = true;
+        if (evalRes.lineIntersections === 0) break;
+      }
+    }
+
+    // Micro scale clearance if line grazing persists
+    if (!progressMade && evalRes.lineIntersections > 0) {
+      for (let targetNode of candidateTargets) {
+        const parentNode = parentMap[targetNode];
+        if (!parentNode) continue;
+        const edgeKey = `${parentNode}-${targetNode}`;
+
+        for (let scale of [0.88, 1.12, 0.78]) {
+          const trialOverrides = JSON.parse(JSON.stringify(bestOverrides));
+          trialOverrides.edgeScaleFactors[edgeKey] = scale;
+          window.metroOverridesByRoot[rootNode] = trialOverrides;
+          const trialEval = evaluateLayoutQuality(rootNode, alpha);
+
+          if (trialEval.cost < currentCost && trialEval.overlapCount <= evalRes.overlapCount) {
+            currentCost = trialEval.cost;
+            bestOverrides = trialOverrides;
+            evalRes = trialEval;
+            summaryLog.push(`Shortened edge (<strong>${parentNode} → ${targetNode}</strong>) by factor <strong>${scale}×</strong> to prevent touching adjacent line.`);
+            progressMade = true;
+            break;
+          }
+        }
+        if (progressMade) break;
+      }
+    }
+
+    if (!progressMade) break;
+  }
+
+  window.metroOverridesByRoot[rootNode] = bestOverrides;
+
+  const finalEval = evaluateLayoutQuality(rootNode, alpha);
+  if (finalEval.lineIntersections > 0) {
+    summaryLog.push(`<span style="color:#c0392b;">Partial edge resolution: ${finalEval.lineIntersections} edge segment collisions/touching lines remain tightly bounded.</span>`);
+  }
+
+  window.metroChangeSummaryByRoot[rootNode] = summaryLog.length > 0 ? summaryLog : ["Checked all edge orientation paths; layout cannot clear more line overlaps."];
+
+  runFamilyMetroMapLayout(alpha, false);
+  checkAndListOverlappingVertices();
+  checkAndListEdgeOverlaps(rootNode);
+  updateSummaryOfChangesSection(rootNode);
+
+  if (statusElem) {
+    if (finalEval.lineIntersections === 0) {
+      statusElem.innerText = `All edge overlaps/touching lines resolved! (${summaryLog.length} adjustments applied).`;
+    } else {
+      statusElem.innerText = `Edge overlap resolution applied. Remaining collisions: ${finalEval.lineIntersections}.`;
+    }
+  }
+}
+window.fixMetroEdgeOverlaps = fixMetroEdgeOverlaps;
 
 // --- 7. Save Canvas as JPG (Dynamic Bounding Box) ---
 function saveDrawingAsJPG() {
@@ -884,7 +1172,6 @@ function saveDrawingAsJPG() {
   const nodeRadius = 8;
   const padding = 40;
 
-  // 1. Gather all currently visible nodes
   const visibleNodes = Object.keys(nodes).filter(
     k => nodes[k] && nodes[k].style.display !== "none"
   );
@@ -894,7 +1181,6 @@ function saveDrawingAsJPG() {
     return;
   }
 
-  // 2. Compute bounding box encompassing all visible vertices
   let minX = Infinity, minY = Infinity;
   let maxX = -Infinity, maxY = -Infinity;
 
@@ -908,7 +1194,6 @@ function saveDrawingAsJPG() {
     maxY = Math.max(maxY, y + nodeRadius * 2);
   });
 
-  // Also encompass active edge bends within bounding box
   if (window.edgeBends) {
     visibleNodes.forEach(u => {
       (graph[u] || []).forEach(e => {
@@ -925,23 +1210,19 @@ function saveDrawingAsJPG() {
     });
   }
 
-  // Dynamic image dimensions
   const exportWidth = Math.ceil((maxX - minX) + padding * 2);
   const exportHeight = Math.ceil((maxY - minY) + padding * 2);
   const shiftX = padding - minX;
   const shiftY = padding - minY;
 
-  // 3. Create dynamic offscreen canvas
   const exportCanvas = document.createElement("canvas");
   exportCanvas.width = exportWidth;
   exportCanvas.height = exportHeight;
   const ctx = exportCanvas.getContext("2d");
 
-  // Fill canvas background with crisp white
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, exportWidth, exportHeight);
 
-  // 4. Draw SVG edges shifted to fit inside canvas bounding box
   const clonedSvg = svgEl.cloneNode(true);
   clonedSvg.setAttribute("width", exportWidth);
   clonedSvg.setAttribute("height", exportHeight);
@@ -962,7 +1243,6 @@ function saveDrawingAsJPG() {
     ctx.drawImage(img, 0, 0);
     URL.revokeObjectURL(url);
 
-    // 5. Draw visible vertices on top with offset
     visibleNodes.forEach(name => {
       const nodeEl = nodes[name];
       const cx = nodeEl.offsetLeft + nodeRadius + shiftX;
@@ -987,7 +1267,6 @@ function saveDrawingAsJPG() {
       ctx.fillText(name, cx, cy);
     });
 
-    // 6. Download the resulting complete JPG
     const jpgUrl = exportCanvas.toDataURL("image/jpeg", 0.95);
     const downloadLink = document.createElement("a");
     downloadLink.download = `metro_map_${new Date().getTime()}.jpg`;

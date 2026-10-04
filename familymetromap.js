@@ -19,16 +19,42 @@ window.stepBfsState = {
 window.metroOverridesByRoot = {};
 window.metroChangeSummaryByRoot = {};
 
+// Empty override record. angleOffsets = T-junction / branch offset g (in units of pi/4) relative to the
+// parent's orientation, turnDirections = bend sign s (+1 / -1) of a bended link, edgeScaleFactors = length
+// factor for one edge, subtreeScaleFactors = local shrinking factor for all edges below a vertex
+// (Lemma 4.3 of Korst et al.: shrinking a sub-tree enough always separates it from its neighbours).
+function createEmptyOverrides() {
+  return {
+    edgeScaleFactors: {},
+    genderFlips: {},
+    turnDirections: {},
+    angleOffsets: {},
+    subtreeScaleFactors: {}
+  };
+}
+
 function getActiveOverrides(root) {
   if (!window.metroOverridesByRoot[root]) {
-    window.metroOverridesByRoot[root] = {
-      edgeScaleFactors: {},
-      genderFlips: {},
-      turnDirections: {},
-      angleOffsets: {}
-    };
+    window.metroOverridesByRoot[root] = createEmptyOverrides();
   }
-  return window.metroOverridesByRoot[root];
+  const ov = window.metroOverridesByRoot[root];
+  if (!ov.edgeScaleFactors) ov.edgeScaleFactors = {};
+  if (!ov.genderFlips) ov.genderFlips = {};
+  if (!ov.turnDirections) ov.turnDirections = {};
+  if (!ov.angleOffsets) ov.angleOffsets = {};
+  if (!ov.subtreeScaleFactors) ov.subtreeScaleFactors = {};
+  return ov;
+}
+
+// Reads a per-edge override regardless of the direction in which the edge key was stored
+// (a stored value of 0 is a valid override, so hasOwnProperty is used instead of ||).
+function readEdgeOverride(map, u, v) {
+  if (!map) return undefined;
+  const k1 = `${u}-${v}`;
+  const k2 = `${v}-${u}`;
+  if (Object.prototype.hasOwnProperty.call(map, k1)) return map[k1];
+  if (Object.prototype.hasOwnProperty.call(map, k2)) return map[k2];
+  return undefined;
 }
 
 function getActiveSummary(root) {
@@ -118,6 +144,15 @@ function distToSegment(p, v, w) {
 // Detect edge overlap, collinearity, crossing, or touching between two segments
 // Returns: { result: true/false, type: 'overlap' | 'touch' | null }
 function analyzeEdgeCollision(p1, p2, p3, p4, tolerance = 6.0) {
+  // Fast reject: if the bounding boxes are further apart than the tolerance, the segments can neither
+  // cross, share an endpoint, nor come within the touching distance (pure speed-up, same results).
+  if (Math.min(p1.x, p2.x) - Math.max(p3.x, p4.x) > tolerance ||
+      Math.min(p3.x, p4.x) - Math.max(p1.x, p2.x) > tolerance ||
+      Math.min(p1.y, p2.y) - Math.max(p3.y, p4.y) > tolerance ||
+      Math.min(p3.y, p4.y) - Math.max(p1.y, p2.y) > tolerance) {
+    return { result: false, type: null };
+  }
+
   function ccw(A, B, C) {
     return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
   }
@@ -484,132 +519,284 @@ function updateSummaryOfChangesSection(root = null) {
 window.updateSummaryOfChangesSection = updateSummaryOfChangesSection;
 
 // --- 3. Tree Traversal & Metro Map Coordinate Solver ---
+// Layout follows Korst, Pronk & van Wijk (2020), adapted to general (non-binary) trees:
+//  * Orientation rule (Sec. 4): female vertices have an even k (horizontal/vertical), male vertices an odd k
+//    (diagonal). A link leaves its parent u with first-segment direction k(u) + g, where g = 0 continues the
+//    parent's metro line and g = +/-2 is a perpendicular T-junction. If that direction already has the right
+//    parity for the child it is a straight link; otherwise a bended link of two equal segments of length
+//    d / sqrt(2 + sqrt(2)) is used, the second one turned by s = +/-1 (45 deg). For vertices with more than three
+//    children the diagonal offsets g = +/-1, +/-3 are used as extra branch directions.
+//  * Every edge leaving a vertex uses its own first-segment direction (no two links share a start segment, and
+//    none reuses the incoming line), which removes the "edges leave the vertex in the same direction" overlaps.
+//  * Inter-node distance alpha^g (Sec. 4.1) uses the generation of the METRO LINE, not the BFS depth: a child
+//    that continues its parent's line (g = 0) keeps the line generation, a side line (T-junction) adds one.
+//    A minimum segment length keeps vertex disks apart (the paper's "satisfying" condition).
+//  * The binary choices are made generation by generation (breadth first, like Clockwise in Sec. 5) with a
+//    small beam search over the joint choices for all children of a vertex, scored lexicographically like
+//    C(M) = (c1, c2): first no crossings / vertex conflicts, then a large minimum distance, then free room for
+//    the child's own sub-tree, then metro-like preferences, then a large average distance.
+const METRO_MIN_SEGMENT_PX = 34;       // floor for alpha^g lengths (node disks are 16 px)
+const METRO_ABS_MIN_SEGMENT_PX = 20;   // hard floor even when a sub-tree is shrunk by the fixers
+const METRO_NODE_CLEARANCE_PX = 26;    // a new vertex closer than this to another vertex is a conflict
+const METRO_LINE_CLEARANCE_PX = 12;    // a vertex closer than this to a foreign line is a conflict
+const METRO_BEAM_WIDTH = 4;
+
+function metroEdgeGeometry(p, firstDir, s, len) {
+  if (s === 0) {
+    const a = getBaseAngle(firstDir);
+    return {
+      pos: { x: p.x + len * Math.cos(a), y: p.y + len * Math.sin(a) },
+      bend: null,
+      finalK: firstDir
+    };
+  }
+  const seg = len / Math.sqrt(2 + Math.sqrt(2));
+  const a1 = getBaseAngle(firstDir);
+  const bend = { x: p.x + seg * Math.cos(a1), y: p.y + seg * Math.sin(a1) };
+  const finalK = ((firstDir + s) % 8 + 8) % 8;
+  const a2 = getBaseAngle(finalK);
+  return {
+    pos: { x: bend.x + seg * Math.cos(a2), y: bend.y + seg * Math.sin(a2) },
+    bend: bend,
+    finalK: finalK
+  };
+}
+
+function metroBranchPreference(g) {
+  const table = { "0": 0, "2": 1, "-2": 1, "1": 2, "-1": 2, "3": 3, "-3": 3, "4": 4, "-4": 4 };
+  return table[String(g)] !== undefined ? table[String(g)] : 4;
+}
+
 function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLength = 90) {
   const coords = {};
   const orientations = {};
   const localBends = {};
   const linesDrawn = [];
 
+  if (!rootName || !graph[rootName]) {
+    return { coords, bends: localBends, linesDrawn, orientations };
+  }
+
   const startX = 350;
   const startY = 220;
   coords[rootName] = { x: startX, y: startY };
-  
-  const activeOverrides = getActiveOverrides(rootName);
+
+  const ov = getActiveOverrides(rootName);
   const rootGender = getNodeGender(rootName, rootName);
   orientations[rootName] = rootGender === "F" ? 2 : 3;
 
-  const visitedNodes = new Set([rootName]);
-  const queue = [{ name: rootName, gen: 0 }];
+  // Rooted structure of the tree (BFS order = generation by generation)
+  const parentOf = {};
+  const childrenOf = {};
+  const order = [rootName];
+  const seen = new Set([rootName]);
+  for (let i = 0; i < order.length; i++) {
+    const u = order[i];
+    childrenOf[u] = [];
+    (graph[u] || []).forEach(e => {
+      if (!seen.has(e.to)) {
+        seen.add(e.to);
+        parentOf[e.to] = u;
+        childrenOf[u].push(e.to);
+        order.push(e.to);
+      }
+    });
+  }
+  const subtreeSize = {};
+  for (let i = order.length - 1; i >= 0; i--) {
+    const u = order[i];
+    subtreeSize[u] = 1 + childrenOf[u].reduce((sum, c) => sum + subtreeSize[c], 0);
+  }
 
-  while (queue.length > 0) {
-    const { name: u, gen } = queue.shift();
-    const uPos = coords[u];
+  const lineGen = { [rootName]: 0 };
+  const scaleMul = { [rootName]: ov.subtreeScaleFactors[rootName] || 1 };
+  const placedNames = [rootName];
+
+  const samePoint = (a, b) => Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6;
+
+  // Candidate links for child v of u
+  function buildOptions(u, v) {
     const uK = orientations[u];
-    const uGender = getNodeGender(u, rootName);
+    const vGender = getNodeGender(v, rootName);
+    const forcedG = readEdgeOverride(ov.angleOffsets, u, v);
+    const forcedTurn = readEdgeOverride(ov.turnDirections, u, v);
+    const edgeScale = readEdgeOverride(ov.edgeScaleFactors, u, v) || 1.0;
+    const gList = forcedG !== undefined ? [forcedG] : [0, 2, -2, 1, -1, 3, -3, 4];
 
-    const neighbors = (graph[u] || [])
-      .map(e => e.to)
-      .filter(v => !visitedNodes.has(v));
+    const opts = [];
+    gList.forEach(g => {
+      const firstDir = ((uK + g) % 8 + 8) % 8;
+      const lg = g === 0 ? lineGen[u] : lineGen[u] + 1;
+      let len = Math.max(baseSegmentLength * Math.pow(alpha, lg), METRO_MIN_SEGMENT_PX);
+      len = Math.max(len * edgeScale * scaleMul[u], METRO_ABS_MIN_SEGMENT_PX);
 
-    neighbors.forEach(v => {
-      visitedNodes.add(v);
-      const vGender = getNodeGender(v, rootName);
+      const straight = (firstDir % 2 === 0) === (vGender === "F");
+      let sList;
+      if (straight) sList = [0];
+      else if (forcedTurn === 1 || forcedTurn === -1) sList = [forcedTurn];
+      else sList = [1, -1];
 
-      const edgeKey = `${u}-${v}`;
-      const revKey = `${v}-${u}`;
-      const edgeScale = (activeOverrides.edgeScaleFactors[edgeKey] || activeOverrides.edgeScaleFactors[revKey]) || 1.0;
-      
-      const forcedTurnVal = activeOverrides.turnDirections[edgeKey] !== undefined 
-        ? activeOverrides.turnDirections[edgeKey] 
-        : activeOverrides.turnDirections[revKey];
-      const forcedTurn = forcedTurnVal !== undefined ? forcedTurnVal : null;
-      
-      const angleOffset = (activeOverrides.angleOffsets[edgeKey] || activeOverrides.angleOffsets[revKey]) || 0;
-
-      const unitDist = baseSegmentLength * Math.pow(alpha, gen) * edgeScale;
-
-      const baseK = (uK + angleOffset + 8) % 8;
-      const choices = forcedTurn !== null ? [forcedTurn] : [-1, 1];
-      let bestPos = null;
-      let bestBend = null;
-      let bestK = baseK;
-      let minCollisions = Infinity;
-      let maxDistToExisting = -1;
-
-      choices.forEach(turn => {
-        let nextK = baseK;
-        let pNext = { x: uPos.x, y: uPos.y };
-        let bendPt = null;
-
-        if (uGender === vGender) {
-          nextK = (baseK + (turn < 0 ? 4 : 0) + 8) % 8;
-          const rad = getBaseAngle(nextK);
-          pNext = {
-            x: uPos.x + unitDist * Math.cos(rad),
-            y: uPos.y + unitDist * Math.sin(rad)
-          };
-        } else {
-          const bendedSegmentLen = unitDist / Math.sqrt(2 + Math.sqrt(2));
-          const bendAngle = getBaseAngle((baseK + turn + 8) % 8);
-          bendPt = {
-            x: uPos.x + bendedSegmentLen * Math.cos(bendAngle),
-            y: uPos.y + bendedSegmentLen * Math.sin(bendAngle)
-          };
-
-          nextK = (baseK + turn * 2 + 8) % 8;
-          const finalAngle = getBaseAngle(nextK);
-          pNext = {
-            x: bendPt.x + bendedSegmentLen * Math.cos(finalAngle),
-            y: bendPt.y + bendedSegmentLen * Math.sin(finalAngle)
-          };
-        }
-
-        let collisions = 0;
-        linesDrawn.forEach(seg => {
-          if (bendPt) {
-            if (segmentsIntersect(uPos, bendPt, seg.p1, seg.p2) || segmentsIntersect(bendPt, pNext, seg.p1, seg.p2)) {
-              collisions++;
-            }
-          } else {
-            if (segmentsIntersect(uPos, pNext, seg.p1, seg.p2)) {
-              collisions++;
-            }
-          }
-        });
-
-        let nearestNodeDist = Infinity;
-        Object.keys(coords).forEach(other => {
-          const d = Math.hypot(coords[other].x - pNext.x, coords[other].y - pNext.y);
-          if (d < nearestNodeDist) nearestNodeDist = d;
-        });
-
-        if (collisions < minCollisions || (collisions === minCollisions && nearestNodeDist > maxDistToExisting)) {
-          minCollisions = collisions;
-          maxDistToExisting = nearestNodeDist;
-          bestPos = pNext;
-          bestBend = bendPt;
-          bestK = nextK;
-        }
+      sList.forEach(sTurn => {
+        opts.push({ g, s: sTurn, firstDir, lg, len, pref: metroBranchPreference(g) });
       });
+    });
+    return opts;
+  }
 
-      coords[v] = bestPos;
-      orientations[v] = bestK;
-      if (bestBend) {
-        localBends[`${u}-${v}`] = bestBend;
-      }
-      
+  // Score of placing one link, given committed geometry plus the tentative siblings of this beam state
+  // nearNodes / nearSegs: committed geometry within reach of u (everything farther away cannot change the score)
+  function scorePlacement(u, v, geom, len, tentative, nearNodes, nearSegs) {
+    const uPos = coords[u];
+    const pos = geom.pos;
+    const newSegs = geom.bend
+      ? [{ p1: uPos, p2: geom.bend }, { p1: geom.bend, p2: pos }]
+      : [{ p1: uPos, p2: pos }];
+
+    let vertexConf = 0;
+    let edgeConf = 0;
+    let clearance = Infinity;
+
+    const checkNode = (name, pt) => {
+      if (name === u) return;
+      const dn = Math.hypot(pt.x - pos.x, pt.y - pos.y);
+      if (dn < METRO_NODE_CLEARANCE_PX) vertexConf++;
+      if (dn < clearance) clearance = dn;
+      newSegs.forEach(sg => {
+        if (distToSegment(pt, sg.p1, sg.p2) < METRO_LINE_CLEARANCE_PX) vertexConf++;
+      });
+    };
+    nearNodes.forEach(n => checkNode(n, coords[n]));
+    tentative.forEach(it => checkNode(it.v, it.pos));
+
+    const checkSeg = (ex) => {
+      const incidentToU = samePoint(ex.p1, uPos) || samePoint(ex.p2, uPos);
+      const ds = distToSegment(pos, ex.p1, ex.p2);
+      if (ds < METRO_LINE_CLEARANCE_PX) vertexConf++;
+      if (!incidentToU && ds * 1.5 < clearance) clearance = ds * 1.5;
+      newSegs.forEach(sg => {
+        if (analyzeEdgeCollision(sg.p1, sg.p2, ex.p1, ex.p2, 6.0).result) edgeConf++;
+      });
+    };
+    nearSegs.forEach(checkSeg);
+    tentative.forEach(it => it.segs.forEach(checkSeg));
+
+    // Free room in front of v for its own sub-tree (one-step look-ahead)
+    let roomPenalty = 0;
+    if (childrenOf[v] && childrenOf[v].length > 0) {
+      const a = getBaseAngle(geom.finalK);
+      let room = Infinity;
+      [0.6, 1.2].forEach(t => {
+        const sp = { x: pos.x + t * len * Math.cos(a), y: pos.y + t * len * Math.sin(a) };
+        nearNodes.forEach(n => {
+          if (n === u) return;
+          room = Math.min(room, Math.hypot(coords[n].x - sp.x, coords[n].y - sp.y));
+        });
+        tentative.forEach(it => {
+          room = Math.min(room, Math.hypot(it.pos.x - sp.x, it.pos.y - sp.y));
+        });
+        nearSegs.forEach(ex => {
+          if (samePoint(ex.p1, uPos) || samePoint(ex.p2, uPos)) return;
+          room = Math.min(room, distToSegment(sp, ex.p1, ex.p2));
+        });
+      });
+      if (room === Infinity) room = len;
+      const weight = Math.min(subtreeSize[v] - 1, 4) / 2;
+      roomPenalty = Math.max(0, len - room) * 15 * weight;
+    }
+
+    if (clearance === Infinity) clearance = len;
+
+    return vertexConf * 1e6
+      + edgeConf * 1e5
+      + Math.max(0, 0.9 * len - clearance) * 40
+      + roomPenalty;
+    // (preference and average-distance terms are added by the caller)
+  }
+
+  for (const u of order) {
+    const kids = childrenOf[u]
+      .map((c, idx) => ({ c, idx }))
+      .sort((a, b) => (subtreeSize[b.c] - subtreeSize[a.c]) || (a.idx - b.idx))
+      .map(o => o.c);
+    if (kids.length === 0) continue;
+
+    const uPos = coords[u];
+    const blocked = new Set();
+    if (u !== rootName) blocked.add((orientations[u] + 4) % 8);   // the incoming metro line
+
+    // Spatial pruning: only geometry near u can interact with the new links or the look-ahead samples
+    const optsByKid = {};
+    let maxLen = 0;
+    kids.forEach(v => {
+      optsByKid[v] = buildOptions(u, v);
+      optsByKid[v].forEach(o => { if (o.len > maxLen) maxLen = o.len; });
+    });
+    const reach = maxLen * 2.4 + METRO_NODE_CLEARANCE_PX + 10;
+    const nearNodes = placedNames.filter(n => Math.hypot(coords[n].x - uPos.x, coords[n].y - uPos.y) <= reach);
+    const nearSegs = linesDrawn.filter(ex => distToSegment(uPos, ex.p1, ex.p2) <= reach);
+
+    let beam = [{ cost: 0, items: [] }];
+
+    kids.forEach(v => {
+      const opts = optsByKid[v];
+
+      const expand = (enforceDistinct) => {
+        const out = [];
+        beam.forEach(state => {
+          const used = new Set(blocked);
+          state.items.forEach(it => used.add(it.firstDir));
+          opts.forEach(opt => {
+            if (enforceDistinct && used.has(opt.firstDir)) return;
+            const geom = metroEdgeGeometry(uPos, opt.firstDir, opt.s, opt.len);
+            let score = scorePlacement(u, v, geom, opt.len, state.items, nearNodes, nearSegs);
+            score += opt.pref * 12;
+            // c2-like term: prefer positions far from the rest of the drawing on average
+            let sum = 0, cnt = 0;
+            placedNames.forEach(n => { sum += Math.hypot(coords[n].x - geom.pos.x, coords[n].y - geom.pos.y); cnt++; });
+            score -= (cnt > 0 ? sum / cnt : 0) * 0.02;
+
+            const segs = geom.bend
+              ? [{ p1: uPos, p2: geom.bend }, { p1: geom.bend, p2: geom.pos }]
+              : [{ p1: uPos, p2: geom.pos }];
+            out.push({
+              cost: state.cost + score,
+              items: state.items.concat([{
+                v, pos: geom.pos, bend: geom.bend, finalK: geom.finalK,
+                firstDir: opt.firstDir, lg: opt.lg, segs
+              }])
+            });
+          });
+        });
+        return out;
+      };
+
+      let next = expand(true);
+      if (next.length === 0) next = expand(false);   // more than 7 children or conflicting overrides
+      next.sort((a, b) => a.cost - b.cost);           // stable sort keeps the result deterministic
+      beam = next.slice(0, METRO_BEAM_WIDTH);
+    });
+
+    const best = beam[0];
+    best.items.forEach(it => {
+      const v = it.v;
+      coords[v] = it.pos;
+      orientations[v] = it.finalK;
+      lineGen[v] = it.lg;
+      scaleMul[v] = scaleMul[u] * (ov.subtreeScaleFactors[v] || 1);
+      placedNames.push(v);
+
       const canonicalKey = [u, v].sort().join("-");
-      if (bestBend) {
-        linesDrawn.push({ p1: uPos, p2: bestBend, edgeKey: canonicalKey, u, v });
-        linesDrawn.push({ p1: bestBend, p2: bestPos, edgeKey: canonicalKey, u, v });
+      if (it.bend) {
+        localBends[`${u}-${v}`] = it.bend;
+        linesDrawn.push({ p1: uPos, p2: it.bend, edgeKey: canonicalKey, u, v });
+        linesDrawn.push({ p1: it.bend, p2: it.pos, edgeKey: canonicalKey, u, v });
       } else {
-        linesDrawn.push({ p1: uPos, p2: bestPos, edgeKey: canonicalKey, u, v });
+        linesDrawn.push({ p1: uPos, p2: it.pos, edgeKey: canonicalKey, u, v });
       }
-      queue.push({ name: v, gen: gen + 1 });
     });
   }
 
-  return { coords, bends: localBends, linesDrawn };
+  return { coords, bends: localBends, linesDrawn, orientations };
 }
 
 // Helper to pre-calculate global offsets
@@ -666,12 +853,7 @@ function runFamilyMetroMapLayout(alpha = 0.75, resetOverrides = true) {
   }
 
   if (resetOverrides) {
-    window.metroOverridesByRoot[rootNode] = {
-      edgeScaleFactors: {},
-      genderFlips: {},
-      turnDirections: {},
-      angleOffsets: {}
-    };
+    window.metroOverridesByRoot[rootNode] = createEmptyOverrides();
     window.metroChangeSummaryByRoot[rootNode] = [];
   }
 
@@ -755,7 +937,12 @@ function stepBFSMove(alpha = 0.75) {
     return;
   }
 
-  if (!window.stepBfsState.active || window.stepBfsState.root !== rootNode) {
+  if (!window.stepBfsState.active || window.stepBfsState.root !== rootNode || window.stepBfsState.alpha !== alpha) {
+    // A fresh step-by-step run starts from exactly the same state as "Run Full Metro Layout"
+    // (overrides from earlier fixes are cleared), so both buttons produce the identical drawing.
+    window.metroOverridesByRoot[rootNode] = createEmptyOverrides();
+    window.metroChangeSummaryByRoot[rootNode] = [];
+
     const fullLayers = computeBFSLayers(rootNode);
     const flattenedOrder = [];
     fullLayers.forEach(layer => {
@@ -774,6 +961,7 @@ function stepBFSMove(alpha = 0.75) {
     window.stepBfsState = {
       active: true,
       root: rootNode,
+      alpha: alpha,
       stepIndex: 0,
       order: flattenedOrder,
       fullLayers: fullLayers,
@@ -911,7 +1099,7 @@ function drawPartialMetroEdges(visibleSet) {
 
 // Layout Evaluation Metric: penalizes vertex overlaps, edge crossings, and touching lines
 function evaluateLayoutQuality(rootNode, alpha) {
-  const { coords, bends, linesDrawn } = generateFamilyMetroCoordinates(rootNode, alpha, 90);
+  const { coords, bends, linesDrawn, orientations } = generateFamilyMetroCoordinates(rootNode, alpha, 90);
   const nodeKeys = Object.keys(coords);
   let overlapCount = 0;
   let minDistance = Infinity;
@@ -942,10 +1130,9 @@ function evaluateLayoutQuality(rootNode, alpha) {
 
       if (s1.edgeKey === s2.edgeKey) continue;
 
-      const pairKey = [s1.edgeKey, s2.edgeKey].sort().join("::");
-      if (processedEdgePairs.has(pairKey)) continue;
-
       if (edgeSegmentsOverlapOrTouch(s1.p1, s1.p2, s2.p1, s2.p2, 6.0)) {
+        const pairKey = s1.edgeKey < s2.edgeKey ? `${s1.edgeKey}::${s2.edgeKey}` : `${s2.edgeKey}::${s1.edgeKey}`;
+        if (processedEdgePairs.has(pairKey)) continue;
         processedEdgePairs.add(pairKey);
         lineIntersections++;
         collidingEdgePairs.push({ s1, s2 });
@@ -954,7 +1141,81 @@ function evaluateLayoutQuality(rootNode, alpha) {
   }
 
   const cost = (overlapCount * 100000) + (lineIntersections * 5000) - (minDistance === Infinity ? 0 : minDistance);
-  return { cost, overlapCount, lineIntersections, minDistance, overlappingPairs, collidingEdgePairs, coords, bends, linesDrawn };
+  return { cost, overlapCount, lineIntersections, minDistance, overlappingPairs, collidingEdgePairs, coords, bends, linesDrawn, orientations };
+}
+
+// --- 6. Shared helpers for the overlap fixers ---
+// The fixers work like the paper's suggested post-processing ("disentangled or beautified ... through
+// flipping sub-trees"): they force the binary choices (branch side g, bend sign s) of one link at a time and let
+// the layout algorithm re-place everything below it, and as a last resort they shrink a whole sub-tree locally
+// (Lemma 4.3: a small enough shrinking factor always separates neighbouring sub-trees).
+// Gender is never changed: the generalized orientation rule allows any branch direction for either gender.
+// Evaluation budget of one fixer run (deterministic; smaller for big trees because each evaluation costs more)
+function metroFixBudget() {
+  const n = Object.keys(graph).length || 1;
+  return Math.max(150, Math.min(500, Math.round(25000 / n)));
+}
+
+function buildMetroParentMap(rootNode) {
+  const parentMap = {};
+  const queue = [rootNode];
+  const visited = new Set([rootNode]);
+  while (queue.length > 0) {
+    const u = queue.shift();
+    (graph[u] || []).forEach(e => {
+      if (!visited.has(e.to)) {
+        visited.add(e.to);
+        parentMap[e.to] = u;
+        queue.push(e.to);
+      }
+    });
+  }
+  return parentMap;
+}
+
+// All (g, s) combinations worth trying for the link parent -> target. "undefined" means: leave the choice to
+// the layout algorithm. Turn variants are skipped when the chosen direction gives a straight link.
+function buildMetroFixTrials(rootNode, parentNode, targetNode, orientations) {
+  const gChoices = [undefined, 2, -2, 0, 1, -1, 3, -3];
+  if (parentNode === rootNode) gChoices.push(4);
+  const targetIsF = getNodeGender(targetNode, rootNode) === "F";
+  const parentK = orientations && orientations[parentNode] !== undefined ? orientations[parentNode] : 0;
+
+  const trials = [];
+  gChoices.forEach(g => {
+    let turnChoices = [undefined, 1, -1];
+    if (g !== undefined) {
+      const firstDir = ((parentK + g) % 8 + 8) % 8;
+      const straight = (firstDir % 2 === 0) === targetIsF;
+      if (straight) turnChoices = [undefined];
+    }
+    turnChoices.forEach(t => {
+      if (g === undefined && t === undefined) return;   // identical to the current layout
+      trials.push({ g, t });
+    });
+  });
+  return trials;
+}
+
+function describeMetroFixTrial(g, t) {
+  const parts = [];
+  if (g === 0) parts.push("continued on parent's metro line");
+  else if (g === 2) parts.push("branched as T-junction (+90°)");
+  else if (g === -2) parts.push("branched as T-junction (-90°)");
+  else if (g === 4) parts.push("placed on opposite side of parent (180°)");
+  else if (g !== undefined) parts.push(`branched at ${g * 45}°`);
+  if (t !== undefined) parts.push(`bend set to ${t > 0 ? "+45°" : "-45°"}`);
+  return parts.join(", ");
+}
+
+function applyMetroFixTrial(baseOverrides, edgeKey, g, t) {
+  const trial = JSON.parse(JSON.stringify(baseOverrides));
+  if (!trial.subtreeScaleFactors) trial.subtreeScaleFactors = {};
+  if (g !== undefined) trial.angleOffsets[edgeKey] = g;
+  else delete trial.angleOffsets[edgeKey];
+  if (t !== undefined) trial.turnDirections[edgeKey] = t;
+  else delete trial.turnDirections[edgeKey];
+  return trial;
 }
 
 // --- 6A. Fix Vertex Overlaps ---
@@ -978,43 +1239,44 @@ function fixMetroOverlaps(alpha = 0.75) {
     return;
   }
 
-  const parentMap = {};
-  const queue = [rootNode];
-  const visited = new Set([rootNode]);
-  while (queue.length > 0) {
-    const u = queue.shift();
-    (graph[u] || []).forEach(e => {
-      if (!visited.has(e.to)) {
-        visited.add(e.to);
-        parentMap[e.to] = u;
-        queue.push(e.to);
-      }
-    });
-  }
+  const parentMap = buildMetroParentMap(rootNode);
 
   let rootOverrides = getActiveOverrides(rootNode);
   let bestOverrides = JSON.parse(JSON.stringify(rootOverrides));
   let currentCost = evalRes.cost;
   let summaryLog = [];
+  let evaluations = 0;
+  const maxEvaluations = metroFixBudget();
+  const budgetLeft = () => evaluations < maxEvaluations;
+  const tryOverrides = (ovr) => {
+    evaluations++;
+    window.metroOverridesByRoot[rootNode] = ovr;
+    return evaluateLayoutQuality(rootNode, alpha);
+  };
 
   const maxOuterRounds = 16;
   let outerRound = 0;
 
-  while (evalRes.overlapCount > 0 && outerRound < maxOuterRounds) {
+  while (evalRes.overlapCount > 0 && outerRound < maxOuterRounds && budgetLeft()) {
     outerRound++;
     let progressMade = false;
 
+    // Overlapping vertices, their parents and grandparents (re-routing an ancestor moves the whole sub-tree)
     const targetSet = new Set();
     evalRes.overlappingPairs.forEach(pair => {
-      if (pair.u !== rootNode) targetSet.add(pair.u);
-      if (pair.v !== rootNode) targetSet.add(pair.v);
-      if (parentMap[pair.u] && parentMap[pair.u] !== rootNode) targetSet.add(parentMap[pair.u]);
-      if (parentMap[pair.v] && parentMap[pair.v] !== rootNode) targetSet.add(parentMap[pair.v]);
+      [pair.u, pair.v].forEach(n => {
+        let x = n;
+        for (let depth = 0; depth < 3 && x && x !== rootNode; depth++) {
+          targetSet.add(x);
+          x = parentMap[x];
+        }
+      });
     });
 
     const candidateTargets = Array.from(targetSet);
 
     for (let targetNode of candidateTargets) {
+      if (!budgetLeft()) break;
       const parentNode = parentMap[targetNode];
       if (!parentNode) continue;
 
@@ -1023,76 +1285,71 @@ function fixMetroOverlaps(alpha = 0.75) {
       let nodeBestCost = currentCost;
       let nodeBestAction = null;
 
-      const angleOffsets = [4, 2, -2, 1, -1, 3, -3, 0];
-      const currentGender = getNodeGender(targetNode, rootNode);
-      const flippedGender = currentGender === "M" ? "F" : "M";
-      const genderChoices = [
-        { flip: null, label: "" },
-        { flip: flippedGender, label: `flipped gender to ${flippedGender}` }
-      ];
-      const turns = [null, 1, -1];
+      const trials = buildMetroFixTrials(rootNode, parentNode, targetNode, evalRes.orientations);
+      for (let trialDef of trials) {
+        if (!budgetLeft()) break;
+        const trialOverrides = applyMetroFixTrial(bestOverrides, edgeKey, trialDef.g, trialDef.t);
+        const trialEval = tryOverrides(trialOverrides);
 
-      for (let gChoice of genderChoices) {
-        for (let angle of angleOffsets) {
-          for (let turn of turns) {
-            const trialOverrides = JSON.parse(JSON.stringify(bestOverrides));
-
-            if (angle !== 0) trialOverrides.angleOffsets[edgeKey] = angle;
-            else delete trialOverrides.angleOffsets[edgeKey];
-
-            if (gChoice.flip) trialOverrides.genderFlips[targetNode] = gChoice.flip;
-            else delete trialOverrides.genderFlips[targetNode];
-
-            if (turn !== null) trialOverrides.turnDirections[edgeKey] = turn;
-            else delete trialOverrides.turnDirections[edgeKey];
-
-            window.metroOverridesByRoot[rootNode] = trialOverrides;
-            const trialEval = evaluateLayoutQuality(rootNode, alpha);
-
-            if (trialEval.cost < nodeBestCost) {
-              nodeBestCost = trialEval.cost;
-              nodeBestOverrides = JSON.parse(JSON.stringify(trialOverrides));
-
-              let descParts = [];
-              if (angle === 4) descParts.push("placed on opposite side of parent (180°)");
-              else if (angle !== 0) descParts.push(`shifted angle by ${angle * 45}°`);
-              if (gChoice.flip) descParts.push(gChoice.label);
-              if (turn !== null) descParts.push(`inverted bend to ${turn > 0 ? '+45°' : '-45°'}`);
-
-              nodeBestAction = `Relocated vertex <strong>${targetNode}</strong>: ${descParts.join(", ")}.`;
-            }
-          }
+        if (trialEval.cost < nodeBestCost) {
+          nodeBestCost = trialEval.cost;
+          nodeBestOverrides = trialOverrides;
+          nodeBestAction = `Relocated vertex <strong>${targetNode}</strong>: ${describeMetroFixTrial(trialDef.g, trialDef.t) || "re-routed"}.`;
         }
       }
 
       if (nodeBestOverrides && nodeBestCost < currentCost) {
         bestOverrides = nodeBestOverrides;
         currentCost = nodeBestCost;
-        window.metroOverridesByRoot[rootNode] = bestOverrides;
-        evalRes = evaluateLayoutQuality(rootNode, alpha);
+        evalRes = tryOverrides(bestOverrides);
         if (nodeBestAction) summaryLog.push(nodeBestAction);
         progressMade = true;
         if (evalRes.overlapCount === 0) break;
       }
     }
 
+    // Fallback 1: change the length of a single link
     if (!progressMade && evalRes.overlapCount > 0) {
       for (let targetNode of candidateTargets) {
+        if (!budgetLeft()) break;
         const parentNode = parentMap[targetNode];
         if (!parentNode) continue;
         const edgeKey = `${parentNode}-${targetNode}`;
 
-        for (let scale of [0.86, 1.14, 0.76]) {
+        for (let scale of [0.86, 1.14, 0.76, 1.3]) {
           const trialOverrides = JSON.parse(JSON.stringify(bestOverrides));
           trialOverrides.edgeScaleFactors[edgeKey] = scale;
-          window.metroOverridesByRoot[rootNode] = trialOverrides;
-          const trialEval = evaluateLayoutQuality(rootNode, alpha);
+          const trialEval = tryOverrides(trialOverrides);
 
           if (trialEval.cost < currentCost) {
             currentCost = trialEval.cost;
             bestOverrides = trialOverrides;
             evalRes = trialEval;
             summaryLog.push(`Scaled branch (<strong>${parentNode} → ${targetNode}</strong>) by <strong>${scale}×</strong> to clear vertex overlap.`);
+            progressMade = true;
+            break;
+          }
+        }
+        if (progressMade) break;
+      }
+    }
+
+    // Fallback 2 (Lemma 4.3): shrink a whole sub-tree with a local shrinking factor
+    if (!progressMade && evalRes.overlapCount > 0) {
+      for (let targetNode of candidateTargets.concat(candidateTargets.map(n => parentMap[n]).filter(Boolean))) {
+        if (!budgetLeft()) break;
+        const current = (bestOverrides.subtreeScaleFactors || {})[targetNode] || 1;
+        for (let factor of [0.8, 0.65, 0.5]) {
+          const trialOverrides = JSON.parse(JSON.stringify(bestOverrides));
+          if (!trialOverrides.subtreeScaleFactors) trialOverrides.subtreeScaleFactors = {};
+          trialOverrides.subtreeScaleFactors[targetNode] = +(current * factor).toFixed(3);
+          const trialEval = tryOverrides(trialOverrides);
+
+          if (trialEval.cost < currentCost) {
+            currentCost = trialEval.cost;
+            bestOverrides = trialOverrides;
+            evalRes = trialEval;
+            summaryLog.push(`Shrunk sub-tree below <strong>${targetNode}</strong> by local shrinking factor <strong>${factor}</strong> to clear vertex overlap.`);
             progressMade = true;
             break;
           }
@@ -1156,44 +1413,45 @@ function fixMetroEdgeOverlaps(alpha = 0.75) {
     return;
   }
 
-  const parentMap = {};
-  const queue = [rootNode];
-  const visited = new Set([rootNode]);
-  while (queue.length > 0) {
-    const u = queue.shift();
-    (graph[u] || []).forEach(e => {
-      if (!visited.has(e.to)) {
-        visited.add(e.to);
-        parentMap[e.to] = u;
-        queue.push(e.to);
-      }
-    });
-  }
+  const parentMap = buildMetroParentMap(rootNode);
 
   let rootOverrides = getActiveOverrides(rootNode);
   let bestOverrides = JSON.parse(JSON.stringify(rootOverrides));
   let currentCost = evalRes.cost;
   let summaryLog = [];
+  let evaluations = 0;
+  const maxEvaluations = metroFixBudget();
+  const budgetLeft = () => evaluations < maxEvaluations;
+  const tryOverrides = (ovr) => {
+    evaluations++;
+    window.metroOverridesByRoot[rootNode] = ovr;
+    return evaluateLayoutQuality(rootNode, alpha);
+  };
 
   const maxOuterRounds = 16;
   let outerRound = 0;
 
-  while (evalRes.lineIntersections > 0 && outerRound < maxOuterRounds) {
+  while (evalRes.lineIntersections > 0 && outerRound < maxOuterRounds && budgetLeft()) {
     outerRound++;
     let progressMade = false;
 
-    // Collect endpoints of colliding edges
+    // Child endpoints of colliding edges, plus their parents and grandparents
     const targetSet = new Set();
     evalRes.collidingEdgePairs.forEach(pair => {
-      [pair.s1.u, pair.s1.v, pair.s2.u, pair.s2.v].forEach(n => {
-        if (n !== rootNode) targetSet.add(n);
-        if (parentMap[n] && parentMap[n] !== rootNode) targetSet.add(parentMap[n]);
+      [pair.s1, pair.s2].forEach(sg => {
+        const child = parentMap[sg.v] === sg.u ? sg.v : sg.u;
+        let x = child;
+        for (let depth = 0; depth < 3 && x && x !== rootNode; depth++) {
+          targetSet.add(x);
+          x = parentMap[x];
+        }
       });
     });
 
     const candidateTargets = Array.from(targetSet);
 
     for (let targetNode of candidateTargets) {
+      if (!budgetLeft()) break;
       const parentNode = parentMap[targetNode];
       if (!parentNode) continue;
 
@@ -1202,76 +1460,71 @@ function fixMetroEdgeOverlaps(alpha = 0.75) {
       let nodeBestCost = currentCost;
       let nodeBestAction = null;
 
-      const angleOffsets = [2, -2, 4, 1, -1, 3, -3, 0];
-      const currentGender = getNodeGender(targetNode, rootNode);
-      const flippedGender = currentGender === "M" ? "F" : "M";
-      const genderChoices = [
-        { flip: null, label: "" },
-        { flip: flippedGender, label: `flipped gender to ${flippedGender}` }
-      ];
-      const turns = [null, 1, -1];
+      const trials = buildMetroFixTrials(rootNode, parentNode, targetNode, evalRes.orientations);
+      for (let trialDef of trials) {
+        if (!budgetLeft()) break;
+        const trialOverrides = applyMetroFixTrial(bestOverrides, edgeKey, trialDef.g, trialDef.t);
+        const trialEval = tryOverrides(trialOverrides);
 
-      for (let gChoice of genderChoices) {
-        for (let angle of angleOffsets) {
-          for (let turn of turns) {
-            const trialOverrides = JSON.parse(JSON.stringify(bestOverrides));
-
-            if (angle !== 0) trialOverrides.angleOffsets[edgeKey] = angle;
-            else delete trialOverrides.angleOffsets[edgeKey];
-
-            if (gChoice.flip) trialOverrides.genderFlips[targetNode] = gChoice.flip;
-            else delete trialOverrides.genderFlips[targetNode];
-
-            if (turn !== null) trialOverrides.turnDirections[edgeKey] = turn;
-            else delete trialOverrides.turnDirections[edgeKey];
-
-            window.metroOverridesByRoot[rootNode] = trialOverrides;
-            const trialEval = evaluateLayoutQuality(rootNode, alpha);
-
-            if (trialEval.cost < nodeBestCost && trialEval.overlapCount <= evalRes.overlapCount) {
-              nodeBestCost = trialEval.cost;
-              nodeBestOverrides = JSON.parse(JSON.stringify(trialOverrides));
-
-              let descParts = [];
-              if (angle === 4) descParts.push("re-routed to opposite side (180°)");
-              else if (angle !== 0) descParts.push(`shifted sector by ${angle * 45}°`);
-              if (gChoice.flip) descParts.push(gChoice.label);
-              if (turn !== null) descParts.push(`flipped bend to ${turn > 0 ? '+45°' : '-45°'}`);
-
-              nodeBestAction = `Resolved edge collision on (<strong>${parentNode} → ${targetNode}</strong>): ${descParts.join(", ")}.`;
-            }
-          }
+        if (trialEval.cost < nodeBestCost && trialEval.overlapCount <= evalRes.overlapCount) {
+          nodeBestCost = trialEval.cost;
+          nodeBestOverrides = trialOverrides;
+          nodeBestAction = `Resolved edge collision on (<strong>${parentNode} → ${targetNode}</strong>): ${describeMetroFixTrial(trialDef.g, trialDef.t) || "re-routed"}.`;
         }
       }
 
       if (nodeBestOverrides && nodeBestCost < currentCost) {
         bestOverrides = nodeBestOverrides;
         currentCost = nodeBestCost;
-        window.metroOverridesByRoot[rootNode] = bestOverrides;
-        evalRes = evaluateLayoutQuality(rootNode, alpha);
+        evalRes = tryOverrides(bestOverrides);
         if (nodeBestAction) summaryLog.push(nodeBestAction);
         progressMade = true;
         if (evalRes.lineIntersections === 0) break;
       }
     }
 
+    // Fallback 1: change the length of a single link
     if (!progressMade && evalRes.lineIntersections > 0) {
       for (let targetNode of candidateTargets) {
+        if (!budgetLeft()) break;
         const parentNode = parentMap[targetNode];
         if (!parentNode) continue;
         const edgeKey = `${parentNode}-${targetNode}`;
 
-        for (let scale of [0.88, 1.12, 0.78]) {
+        for (let scale of [0.88, 1.12, 0.78, 1.3]) {
           const trialOverrides = JSON.parse(JSON.stringify(bestOverrides));
           trialOverrides.edgeScaleFactors[edgeKey] = scale;
-          window.metroOverridesByRoot[rootNode] = trialOverrides;
-          const trialEval = evaluateLayoutQuality(rootNode, alpha);
+          const trialEval = tryOverrides(trialOverrides);
 
           if (trialEval.cost < currentCost && trialEval.overlapCount <= evalRes.overlapCount) {
             currentCost = trialEval.cost;
             bestOverrides = trialOverrides;
             evalRes = trialEval;
             summaryLog.push(`Shortened edge (<strong>${parentNode} → ${targetNode}</strong>) by factor <strong>${scale}×</strong> to prevent touching adjacent line.`);
+            progressMade = true;
+            break;
+          }
+        }
+        if (progressMade) break;
+      }
+    }
+
+    // Fallback 2 (Lemma 4.3): shrink a whole sub-tree with a local shrinking factor
+    if (!progressMade && evalRes.lineIntersections > 0) {
+      for (let targetNode of candidateTargets.concat(candidateTargets.map(n => parentMap[n]).filter(Boolean))) {
+        if (!budgetLeft()) break;
+        const current = (bestOverrides.subtreeScaleFactors || {})[targetNode] || 1;
+        for (let factor of [0.8, 0.65, 0.5]) {
+          const trialOverrides = JSON.parse(JSON.stringify(bestOverrides));
+          if (!trialOverrides.subtreeScaleFactors) trialOverrides.subtreeScaleFactors = {};
+          trialOverrides.subtreeScaleFactors[targetNode] = +(current * factor).toFixed(3);
+          const trialEval = tryOverrides(trialOverrides);
+
+          if (trialEval.cost < currentCost && trialEval.overlapCount <= evalRes.overlapCount) {
+            currentCost = trialEval.cost;
+            bestOverrides = trialOverrides;
+            evalRes = trialEval;
+            summaryLog.push(`Shrunk sub-tree below <strong>${targetNode}</strong> by local shrinking factor <strong>${factor}</strong> to clear edge collision.`);
             progressMade = true;
             break;
           }

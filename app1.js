@@ -27,6 +27,41 @@ const STEP = 70;
 
 const getEl = id => document.getElementById(id);
 
+// Vertex label for index i: A..Z, then A1..Z1, A2..Z2, ... (no ASCII overflow past 'Z')
+function getVertexLabel(i) {
+  return String.fromCharCode(65 + (i % 26)) + (i >= 26 ? Math.floor(i / 26) : "");
+}
+
+// Inverse of getVertexLabel; returns -1 for labels that do not follow the A..Z / A1.. scheme
+function getVertexLabelIndex(name) {
+  const m = /^([A-Z])(\d*)$/.exec(String(name));
+  if (!m) return -1;
+  const suffix = m[2] === "" ? 0 : parseInt(m[2], 10);
+  if (m[2] !== "" && suffix < 1) return -1;
+  return suffix * 26 + (m[1].charCodeAt(0) - 65);
+}
+
+// Natural ordering of labels: A, B, ..., Z, A1, B1, ... (custom names afterwards, alphabetically)
+function compareVertexLabels(a, b) {
+  const ia = getVertexLabelIndex(a);
+  const ib = getVertexLabelIndex(b);
+  if (ia >= 0 && ib >= 0) return ia - ib;
+  if (ia >= 0) return -1;
+  if (ib >= 0) return 1;
+  return String(a).localeCompare(String(b));
+}
+
+// Next unused automatic label, starting from nodeIndex (skips names that already exist)
+function nextFreeVertexLabel() {
+  let name = getVertexLabel(nodeIndex);
+  while (graph[name] || nodes[name]) {
+    nodeIndex++;
+    name = getVertexLabel(nodeIndex);
+  }
+  nodeIndex++;
+  return name;
+}
+
 function initAppListeners() {
   const addNodeBtn       = getEl("addNodeBtn");
   const clearBtn         = getEl("clearBtn");
@@ -114,7 +149,7 @@ function addNode(nameOpt) {
   const startNodeInp = getEl("startNode");
   if (!canvasDiv) return;
 
-  const name = nameOpt || String.fromCharCode(65 + nodeIndex++);
+  const name = nameOpt || nextFreeVertexLabel();
   let div = document.createElement("div");
   div.className = "node";
   div.textContent = name;
@@ -526,7 +561,8 @@ function exportList() {
 }
 
 function exportMatrix() {
-  let keys = Object.keys(graph).sort();
+  // Natural label order (A..Z, A1..) so that re-importing the matrix gives every vertex its original name
+  let keys = Object.keys(graph).sort(compareVertexLabels);
   let out = keys.map(u => keys.map(v => graph[u].some(e => e.to === v) ? 1 : 0).join(",")).join("\n");
   downloadFile("graph_matrix.txt", out);
 }
@@ -722,7 +758,7 @@ function buildFromMatrix() {
 
   let labels = [];
   for (let i = 0; i < size; i++) {
-    labels.push(String.fromCharCode(65 + (i % 26)) + (i >= 26 ? Math.floor(i / 26) : ""));
+    labels.push(getVertexLabel(i));
   }
 
   placeNodesGrid(labels);

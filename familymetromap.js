@@ -10,7 +10,9 @@ window.stepBfsState = {
   currentDrawnLayers: [],
   coords: {},
   bends: {},
-  offsets: { x: 0, y: 0 }
+  offsets: { x: 0, y: 0 },
+  seenEdgeCollisions: [],
+  seenVertexOverlaps: []
 };
 
 // Store overrides and change summaries per root to ensure deterministic replays
@@ -114,48 +116,64 @@ function distToSegment(p, v, w) {
 }
 
 // Detect edge overlap, collinearity, crossing, or touching between two segments
-function edgeSegmentsOverlapOrTouch(p1, p2, p3, p4, tolerance = 6.0) {
+// Returns: { result: true/false, type: 'overlap' | 'touch' | null }
+function analyzeEdgeCollision(p1, p2, p3, p4, tolerance = 6.0) {
   function ccw(A, B, C) {
     return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
   }
 
-  const shareEndpoint = (
-    (Math.hypot(p1.x - p3.x, p1.y - p3.y) < 1.0) ||
-    (Math.hypot(p1.x - p4.x, p1.y - p4.y) < 1.0) ||
-    (Math.hypot(p2.x - p3.x, p2.y - p3.y) < 1.0) ||
-    (Math.hypot(p2.x - p4.x, p2.y - p4.y) < 1.0)
-  );
+  // Identify shared endpoints
+  const eps = 1.0;
+  const p1_p3 = Math.hypot(p1.x - p3.x, p1.y - p3.y) < eps;
+  const p1_p4 = Math.hypot(p1.x - p4.x, p1.y - p4.y) < eps;
+  const p2_p3 = Math.hypot(p2.x - p3.x, p2.y - p3.y) < eps;
+  const p2_p4 = Math.hypot(p2.x - p4.x, p2.y - p4.y) < eps;
+  const shareEndpoint = p1_p3 || p1_p4 || p2_p3 || p2_p4;
 
-  // If they cross and do not share an endpoint
+  // 1. Independent Segments Crossing
   if (!shareEndpoint) {
     const intersect = (ccw(p1, p3, p4) !== ccw(p2, p3, p4)) && (ccw(p1, p2, p3) !== ccw(p1, p2, p4));
-    if (intersect) return true;
+    if (intersect) return { result: true, type: 'overlap' };
   }
 
-  // Check if segments are collinear or one grazes/touches the other
+  // 2. Adjacent Edges Sharing a Node
   if (shareEndpoint) {
-    // Check if lines shoot in the exact same direction from the shared point (collinear overlap)
     let common, other1, other2;
-    if (Math.hypot(p1.x - p3.x, p1.y - p3.y) < 1.0) { common = p1; other1 = p2; other2 = p4; }
-    else if (Math.hypot(p1.x - p4.x, p1.y - p4.y) < 1.0) { common = p1; other1 = p2; other2 = p3; }
-    else if (Math.hypot(p2.x - p3.x, p2.y - p3.y) < 1.0) { common = p2; other1 = p1; other2 = p4; }
-    else { common = p2; other1 = p1; other2 = p3; }
+    if (p1_p3)      { common = p1; other1 = p2; other2 = p4; }
+    else if (p1_p4) { common = p1; other1 = p2; other2 = p3; }
+    else if (p2_p3) { common = p2; other1 = p1; other2 = p4; }
+    else            { common = p2; other1 = p1; other2 = p3; }
 
     const angle1 = Math.atan2(other1.y - common.y, other1.x - common.x);
     const angle2 = Math.atan2(other2.y - common.y, other2.x - common.x);
+    
     let diff = Math.abs(angle1 - angle2);
     if (diff > Math.PI) diff = 2 * Math.PI - diff;
-    if (diff < 0.05) return true; // collinear duplicate ray
-    return false;
+
+    // Only flag as collision if the two connected edges leave the shared vertex in the SAME direction (0 deg)
+    if (diff < 0.05) {
+      return { result: true, type: 'overlap' };
+    }
+    
+    // Normal graph connection (different directions or 180-deg straight line continuation)
+    return { result: false, type: null };
   }
 
-  // Non-endpoint minimum distance between segments (touching or grazing)
+  // 3. Proximity / Grazing Check for Independent Segments
   const d1 = distToSegment(p1, p3, p4);
   const d2 = distToSegment(p2, p3, p4);
   const d3 = distToSegment(p3, p1, p2);
   const d4 = distToSegment(p4, p1, p2);
 
-  return Math.min(d1, d2, d3, d4) < tolerance;
+  if (Math.min(d1, d2, d3, d4) < tolerance) {
+    return { result: true, type: 'touch' };
+  }
+
+  return { result: false, type: null };
+}
+
+function edgeSegmentsOverlapOrTouch(p1, p2, p3, p4, tolerance = 6.0) {
+  return analyzeEdgeCollision(p1, p2, p3, p4, tolerance).result;
 }
 
 function segmentsIntersect(p1, p2, p3, p4) {
@@ -211,15 +229,20 @@ function formatBFSLayersColoredHTML(layerArrays, rootName = null) {
   return `[${formattedLayers}]`;
 }
 
-// Overlapping Vertices Detection
-function checkAndListOverlappingVertices(threshold = 16) {
+// Overlapping Vertices Detection (Consolidates multi-node overlap components)
+// options.highlightNew (optional): array of cluster keys already listed in the previous step;
+//   overlap clusters not in this array are highlighted as newly detected.
+// The cluster keys found in the latest call are stored in window.lastVertexOverlapClusterKeys.
+function checkAndListOverlappingVertices(threshold = 16, options = {}) {
   const overlapList = getDomEl("overlapList");
   if (!overlapList) return [];
 
   overlapList.innerHTML = "";
   const nodeKeys = Object.keys(nodes).filter(k => nodes[k] && nodes[k].style.display !== "none");
-  const detectedPairs = [];
+  const adjacency = {};
+  nodeKeys.forEach(k => { adjacency[k] = []; });
 
+  const rawPairs = [];
   for (let i = 0; i < nodeKeys.length; i++) {
     for (let j = i + 1; j < nodeKeys.length; j++) {
       const u = nodeKeys[i];
@@ -234,37 +257,82 @@ function checkAndListOverlappingVertices(threshold = 16) {
       const dist = Math.hypot(x1 - x2, y1 - y2);
 
       if (dist < threshold) {
-        detectedPairs.push({
-          u: u,
-          v: v,
-          dist: Math.round(dist),
-          pos: `(${Math.round(x1)}, ${Math.round(y1)})`
-        });
+        adjacency[u].push(v);
+        adjacency[v].push(u);
+        rawPairs.push({ u, v, dist: Math.round(dist) });
       }
     }
   }
 
-  if (detectedPairs.length === 0) {
+  // Connected components algorithm to group transitive overlaps
+  const visited = new Set();
+  const clusters = [];
+
+  nodeKeys.forEach(node => {
+    if (!visited.has(node) && adjacency[node].length > 0) {
+      const cluster = [];
+      const queue = [node];
+      visited.add(node);
+
+      while (queue.length > 0) {
+        const curr = queue.shift();
+        cluster.push(curr);
+        adjacency[curr].forEach(nbr => {
+          if (!visited.has(nbr)) {
+            visited.add(nbr);
+            queue.push(nbr);
+          }
+        });
+      }
+      clusters.push(cluster);
+    }
+  });
+
+  const clusterKeys = clusters.map(group => group.slice().sort().join(","));
+  window.lastVertexOverlapClusterKeys = clusterKeys;
+
+  const previouslySeen = (options && Array.isArray(options.highlightNew)) ? new Set(options.highlightNew) : null;
+
+  if (clusters.length === 0) {
     const li = document.createElement("li");
     li.style.color = "#27ae60";
     li.style.fontWeight = "bold";
-    li.textContent = "None (No overlapping vertices detected)";
+    li.textContent = "None";
     overlapList.appendChild(li);
   } else {
-    detectedPairs.forEach(pair => {
+    clusters.forEach((group, idx) => {
+      let avgX = 0, avgY = 0;
+      group.forEach(n => {
+        avgX += nodes[n].offsetLeft;
+        avgY += nodes[n].offsetTop;
+      });
+      avgX = Math.round(avgX / group.length);
+      avgY = Math.round(avgY / group.length);
+
       const li = document.createElement("li");
       li.style.padding = "3px 0";
-      li.innerHTML = `<strong style="color: #c0392b;">${pair.u}</strong> overlaps with <strong style="color: #c0392b;">${pair.v}</strong> at approx ${pair.pos} (distance: ${pair.dist}px)`;
+      const nodesFormatted = group.map(n => `<strong style="color: #c0392b;">${n}</strong>`).join(", ");
+      const isNew = previouslySeen && !previouslySeen.has(clusterKeys[idx]);
+      const newBadge = isNew
+        ? ` <span style="background:#f1c40f; color:#2c3e50; font-size:10px; font-weight:bold; padding:1px 5px; border-radius:3px; margin-left:4px;">NEW</span>`
+        : "";
+      li.innerHTML = `Vertices ${nodesFormatted} overlap at approx (${avgX}, ${avgY})${newBadge}`;
+      if (isNew) li.style.background = "#fff3cd";
       overlapList.appendChild(li);
     });
   }
 
-  return detectedPairs;
+  return rawPairs;
 }
 window.checkAndListOverlappingVertices = checkAndListOverlappingVertices;
 
-// Overlapping or Touching Edges Detection
-function checkAndListEdgeOverlaps(rootNode = null) {
+// Overlapping or Touching Edges Detection (Distinguishes touches vs overlaps, prevents duplicate pairs)
+// visibleSet (optional): when given, only edges whose BOTH endpoints are in the set are checked.
+//   This lets the step-by-step BFS drawer reveal edge collisions incrementally, one step at a time.
+// options.highlightNew (optional): array of edge-cluster keys already listed in the previous step;
+//   clusters not in this array are highlighted as newly detected.
+// The cluster keys found in the latest call are stored in window.lastEdgeOverlapClusterKeys.
+function checkAndListEdgeOverlaps(rootNode = null, visibleSet = null, options = {}) {
   const edgeListEl = getDomEl("edgeOverlapList");
   if (!edgeListEl) return [];
 
@@ -283,37 +351,103 @@ function checkAndListEdgeOverlaps(rootNode = null) {
   }
 
   const alpha = parseFloat(getDomEl("metroAlpha")?.value || "0.75");
-  const { linesDrawn } = generateFamilyMetroCoordinates(rootNode, alpha, 90);
+  const { linesDrawn: allLines } = generateFamilyMetroCoordinates(rootNode, alpha, 90);
+
+  // Restrict to edges that are currently drawn (both endpoints placed)
+  const linesDrawn = visibleSet
+    ? allLines.filter(seg => visibleSet.has(seg.u) && visibleSet.has(seg.v))
+    : allLines;
+
   const detectedCollisions = [];
+  const processedEdgePairs = new Set();
 
   for (let i = 0; i < linesDrawn.length; i++) {
     for (let j = i + 1; j < linesDrawn.length; j++) {
       const s1 = linesDrawn[i];
       const s2 = linesDrawn[j];
+
+      // Skip comparing sub-segments belonging to the SAME edge
       if (s1.edgeKey === s2.edgeKey) continue;
 
-      if (edgeSegmentsOverlapOrTouch(s1.p1, s1.p2, s2.p1, s2.p2, 6.0)) {
+      // Ensure each edge pair is evaluated once across all sub-segment combinations
+      const pairKey = [s1.edgeKey, s2.edgeKey].sort().join("::");
+      if (processedEdgePairs.has(pairKey)) continue;
+
+      const analysis = analyzeEdgeCollision(s1.p1, s1.p2, s2.p1, s2.p2, 6.0);
+      if (analysis.result) {
+        processedEdgePairs.add(pairKey);
         detectedCollisions.push({
+          pairKey: pairKey,
           edge1: s1.edgeKey,
           edge2: s2.edgeKey,
           u1: s1.u, v1: s1.v,
-          u2: s2.u, v2: s2.v
+          u2: s2.u, v2: s2.v,
+          type: analysis.type
         });
       }
     }
   }
 
-  if (detectedCollisions.length === 0) {
+  // Group transitive edge collisions into clusters (connected components),
+  // the same way overlapping vertices are grouped (e.g. "Edges B-F, F-H, F-N overlap").
+  const edgeAdj = {};
+  detectedCollisions.forEach(c => {
+    if (!edgeAdj[c.edge1]) edgeAdj[c.edge1] = [];
+    if (!edgeAdj[c.edge2]) edgeAdj[c.edge2] = [];
+    edgeAdj[c.edge1].push(c.edge2);
+    edgeAdj[c.edge2].push(c.edge1);
+  });
+
+  const edgeVisited = new Set();
+  const edgeClusters = [];
+  Object.keys(edgeAdj).forEach(startEdge => {
+    if (edgeVisited.has(startEdge)) return;
+    const cluster = [];
+    const queue = [startEdge];
+    edgeVisited.add(startEdge);
+    while (queue.length > 0) {
+      const curr = queue.shift();
+      cluster.push(curr);
+      edgeAdj[curr].forEach(nbr => {
+        if (!edgeVisited.has(nbr)) {
+          edgeVisited.add(nbr);
+          queue.push(nbr);
+        }
+      });
+    }
+    cluster.sort();
+    const clusterSet = new Set(cluster);
+    // A cluster is a real overlap/collision if any pair inside it overlaps; otherwise it only touches
+    const hasOverlap = detectedCollisions.some(c => clusterSet.has(c.edge1) && c.type !== "touch");
+    edgeClusters.push({ edges: cluster, key: cluster.join(","), type: hasOverlap ? "overlap" : "touch" });
+  });
+
+  window.lastEdgeOverlapClusterKeys = edgeClusters.map(c => c.key);
+
+  const previouslySeen = Array.isArray(options.highlightNew) ? new Set(options.highlightNew) : null;
+
+  if (edgeClusters.length === 0) {
     const li = document.createElement("li");
     li.style.color = "#27ae60";
     li.style.fontWeight = "bold";
-    li.textContent = "None (No edge collisions or touching lines detected)";
+    li.textContent = "None";
     edgeListEl.appendChild(li);
   } else {
-    detectedCollisions.forEach(item => {
+    edgeClusters.forEach(cluster => {
       const li = document.createElement("li");
       li.style.padding = "3px 0";
-      li.innerHTML = `Edge <strong style="color: #d35400;">${item.edge1}</strong> collides/touches edge <strong style="color: #d35400;">${item.edge2}</strong>`;
+      const isNew = previouslySeen && !previouslySeen.has(cluster.key);
+      const newBadge = isNew
+        ? ` <span style="background:#f1c40f; color:#2c3e50; font-size:10px; font-weight:bold; padding:1px 5px; border-radius:3px; margin-left:4px;">NEW</span>`
+        : "";
+      if (cluster.type === "touch") {
+        const edgesFormatted = cluster.edges.map(e => `<strong style="color: #e67e22;">${e}</strong>`).join(", ");
+        li.innerHTML = `Edges ${edgesFormatted} touch / graze each other${newBadge}`;
+      } else {
+        const edgesFormatted = cluster.edges.map(e => `<strong style="color: #c0392b;">${e}</strong>`).join(", ");
+        li.innerHTML = `Edges ${edgesFormatted} collide / overlap${newBadge}`;
+      }
+      if (isNew) li.style.background = "#fff3cd";
       edgeListEl.appendChild(li);
     });
   }
@@ -408,12 +542,6 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
         let bendPt = null;
 
         if (uGender === vGender) {
-          /*nextK = (baseK + (turn > 0 ? 0 : 0)) % 8;
-          const rad = getBaseAngle(nextK);
-          pNext = {
-            x: uPos.x + unitDist * Math.cos(rad),
-            y: uPos.y + unitDist * Math.sin(rad)
-          };*/
           nextK = (baseK + (turn < 0 ? 4 : 0) + 8) % 8;
           const rad = getBaseAngle(nextK);
           pNext = {
@@ -652,12 +780,14 @@ function stepBFSMove(alpha = 0.75) {
       currentDrawnLayers: [],
       coords: coords,
       bends: bends,
-      offsets: { x: offsetX, y: offsetY }
+      offsets: { x: offsetX, y: offsetY },
+      seenEdgeCollisions: [],
+      seenVertexOverlaps: []
     };
 
     if (bfsDisplayElem) bfsDisplayElem.innerHTML = "[]";
     checkAndListOverlappingVertices();
-    checkAndListEdgeOverlaps(rootNode);
+    checkAndListEdgeOverlaps(rootNode, new Set());
     updateSummaryOfChangesSection(rootNode);
   }
 
@@ -665,8 +795,8 @@ function stepBFSMove(alpha = 0.75) {
 
   if (state.stepIndex >= state.order.length) {
     if (statusElem) statusElem.innerText = "FULL TREE DRAWN";
-    checkAndListOverlappingVertices();
-    checkAndListEdgeOverlaps(rootNode);
+    checkAndListOverlappingVertices(16, { highlightNew: state.seenVertexOverlaps || [] });
+    checkAndListEdgeOverlaps(rootNode, new Set(state.order), { highlightNew: state.seenEdgeCollisions || [] });
     updateSummaryOfChangesSection(rootNode);
     return;
   }
@@ -716,8 +846,18 @@ function stepBFSMove(alpha = 0.75) {
   drawPartialMetroEdges(placedSet);
   if (typeof updateCoords === "function") updateCoords();
 
-  checkAndListOverlappingVertices();
-  checkAndListEdgeOverlaps(rootNode);
+  // Incrementally reveal vertex overlaps: only visible vertices are checked,
+  // and overlap groups that appeared in this step are highlighted as NEW.
+  checkAndListOverlappingVertices(16, { highlightNew: state.seenVertexOverlaps || [] });
+  state.seenVertexOverlaps = (window.lastVertexOverlapClusterKeys || []).slice();
+
+  // Incrementally reveal edge collisions: only edges drawn so far are checked,
+  // and collisions that appeared in this step are highlighted as NEW.
+  checkAndListEdgeOverlaps(rootNode, placedSet, {
+    highlightNew: state.seenEdgeCollisions || []
+  });
+  state.seenEdgeCollisions = (window.lastEdgeOverlapClusterKeys || []).slice();
+
   updateSummaryOfChangesSection(rootNode);
 
   if (state.stepIndex >= state.order.length) {
@@ -769,7 +909,7 @@ function drawPartialMetroEdges(visibleSet) {
   }
 }
 
-// Layout Evaluation Metric: strictly penalizes vertex overlaps, edge crossings, and touching lines
+// Layout Evaluation Metric: penalizes vertex overlaps, edge crossings, and touching lines
 function evaluateLayoutQuality(rootNode, alpha) {
   const { coords, bends, linesDrawn } = generateFamilyMetroCoordinates(rootNode, alpha, 90);
   const nodeKeys = Object.keys(coords);
@@ -793,13 +933,20 @@ function evaluateLayoutQuality(rootNode, alpha) {
 
   let lineIntersections = 0;
   const collidingEdgePairs = [];
+  const processedEdgePairs = new Set();
+
   for (let i = 0; i < linesDrawn.length; i++) {
     for (let j = i + 1; j < linesDrawn.length; j++) {
       const s1 = linesDrawn[i];
       const s2 = linesDrawn[j];
+
       if (s1.edgeKey === s2.edgeKey) continue;
 
+      const pairKey = [s1.edgeKey, s2.edgeKey].sort().join("::");
+      if (processedEdgePairs.has(pairKey)) continue;
+
       if (edgeSegmentsOverlapOrTouch(s1.p1, s1.p2, s2.p1, s2.p2, 6.0)) {
+        processedEdgePairs.add(pairKey);
         lineIntersections++;
         collidingEdgePairs.push({ s1, s2 });
       }
@@ -1055,7 +1202,6 @@ function fixMetroEdgeOverlaps(alpha = 0.75) {
       let nodeBestCost = currentCost;
       let nodeBestAction = null;
 
-      // Strategies: Alternative angle sectors, gender toggling, bend flips, scale tweaks
       const angleOffsets = [2, -2, 4, 1, -1, 3, -3, 0];
       const currentGender = getNodeGender(targetNode, rootNode);
       const flippedGender = currentGender === "M" ? "F" : "M";
@@ -1082,7 +1228,6 @@ function fixMetroEdgeOverlaps(alpha = 0.75) {
             window.metroOverridesByRoot[rootNode] = trialOverrides;
             const trialEval = evaluateLayoutQuality(rootNode, alpha);
 
-            // Must improve cost and not introduce vertex overlaps
             if (trialEval.cost < nodeBestCost && trialEval.overlapCount <= evalRes.overlapCount) {
               nodeBestCost = trialEval.cost;
               nodeBestOverrides = JSON.parse(JSON.stringify(trialOverrides));
@@ -1110,7 +1255,6 @@ function fixMetroEdgeOverlaps(alpha = 0.75) {
       }
     }
 
-    // Micro scale clearance if line grazing persists
     if (!progressMade && evalRes.lineIntersections > 0) {
       for (let targetNode of candidateTargets) {
         const parentNode = parentMap[targetNode];
@@ -1163,7 +1307,7 @@ function fixMetroEdgeOverlaps(alpha = 0.75) {
 }
 window.fixMetroEdgeOverlaps = fixMetroEdgeOverlaps;
 
-// --- 7. Save Canvas as JPG (Dynamic Bounding Box) ---
+// --- 7. Save Canvas as JPG ---
 function saveDrawingAsJPG() {
   const canvasEl = getDomEl("canvas");
   const svgEl = getDomEl("edges");

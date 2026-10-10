@@ -386,7 +386,7 @@ function checkAndListEdgeOverlaps(rootNode = null, visibleSet = null, options = 
   }
 
   const alpha = parseFloat(getDomEl("metroAlpha")?.value || "0.75");
-  const { linesDrawn: allLines } = generateFamilyMetroCoordinates(rootNode, alpha, 90);
+  const { linesDrawn: allLines } = generateFamilyMetroCoordinates(rootNode, alpha, metroBaseSegmentLength());
 
   // Restrict to edges that are currently drawn (both endpoints placed)
   const linesDrawn = visibleSet
@@ -541,6 +541,24 @@ const METRO_NODE_CLEARANCE_PX = 26;    // a new vertex closer than this to anoth
 const METRO_LINE_CLEARANCE_PX = 12;    // a vertex closer than this to a foreign line is a conflict
 const METRO_BEAM_WIDTH = 4;
 
+// Starting (base) edge length of the root's metro line, chosen by tree size.
+//   up to 100 vertices : 90 px (unchanged)
+//   101-125 : 120 px   126-150 : 150 px   151-175 : 180 px   176-200 : 210 px
+//   201-225 : 240 px   226-250 : 270 px   251-275 : 300 px   276-300 : 330 px
+// i.e. +30 px for every further band of 25 vertices. Larger trees need more room, because the
+// clearance thresholds (26 / 12 / 6 px) and the 34 px minimum link length do not grow with the tree.
+const METRO_BASE_SEGMENT_PX = 90;
+const METRO_BASE_STEP_PX = 30;          // added per band of 25 vertices above 100
+const METRO_BASE_BAND_SIZE = 25;
+const METRO_BASE_MAX_BANDS = 8;         // 276-300 vertices (the largest drawable tree)
+
+function metroBaseSegmentLength() {
+  const n = (typeof graph !== "undefined" && graph) ? Object.keys(graph).length : 0;
+  if (n <= 100) return METRO_BASE_SEGMENT_PX;
+  const band = Math.min(METRO_BASE_MAX_BANDS, Math.ceil((n - 100) / METRO_BASE_BAND_SIZE));
+  return METRO_BASE_SEGMENT_PX + METRO_BASE_STEP_PX * band;
+}
+
 function metroEdgeGeometry(p, firstDir, s, len) {
   if (s === 0) {
     const a = getBaseAngle(firstDir);
@@ -567,7 +585,7 @@ function metroBranchPreference(g) {
   return table[String(g)] !== undefined ? table[String(g)] : 4;
 }
 
-function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLength = 90) {
+function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLength = metroBaseSegmentLength()) {
   const coords = {};
   const orientations = {};
   const localBends = {};
@@ -801,7 +819,7 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
 
 // Helper to pre-calculate global offsets
 function prepareMetroData(rootNode, alpha) {
-  const { coords, bends, linesDrawn } = generateFamilyMetroCoordinates(rootNode, alpha, 90);
+  const { coords, bends, linesDrawn } = generateFamilyMetroCoordinates(rootNode, alpha, metroBaseSegmentLength());
 
   let minX = Infinity, minY = Infinity;
   Object.keys(coords).forEach(n => {
@@ -937,7 +955,15 @@ function stepBFSMove(alpha = 0.75) {
     return;
   }
 
-  if (!window.stepBfsState.active || window.stepBfsState.root !== rootNode || window.stepBfsState.alpha !== alpha) {
+  // Restart if the graph changed since the step-by-step run started (vertex/edge added or removed),
+  // so the [k / n] counter and the BFS order always match the current graph.
+  const stepGraphChanged = window.stepBfsState.active && (
+    !window.stepBfsState.order ||
+    window.stepBfsState.order.length !== Object.keys(graph).length ||
+    window.stepBfsState.order.some(n => !graph[n] || !nodes[n])
+  );
+
+  if (!window.stepBfsState.active || stepGraphChanged || window.stepBfsState.root !== rootNode || window.stepBfsState.alpha !== alpha) {
     // A fresh step-by-step run starts from exactly the same state as "Run Full Metro Layout"
     // (overrides from earlier fixes are cleared), so both buttons produce the identical drawing.
     window.metroOverridesByRoot[rootNode] = createEmptyOverrides();
@@ -1099,7 +1125,7 @@ function drawPartialMetroEdges(visibleSet) {
 
 // Layout Evaluation Metric: penalizes vertex overlaps, edge crossings, and touching lines
 function evaluateLayoutQuality(rootNode, alpha) {
-  const { coords, bends, linesDrawn, orientations } = generateFamilyMetroCoordinates(rootNode, alpha, 90);
+  const { coords, bends, linesDrawn, orientations } = generateFamilyMetroCoordinates(rootNode, alpha, metroBaseSegmentLength());
   const nodeKeys = Object.keys(coords);
   let overlapCount = 0;
   let minDistance = Infinity;

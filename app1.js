@@ -51,15 +51,45 @@ function compareVertexLabels(a, b) {
   return String(a).localeCompare(String(b));
 }
 
-// Next unused automatic label, starting from nodeIndex (skips names that already exist)
+// Smallest unused automatic label (A, B, ..., Z, A1, ...). Labels freed by removing a vertex are
+// reused, so the automatic labels always match the number of vertices (no gaps, no skipped letters).
 function nextFreeVertexLabel() {
-  let name = getVertexLabel(nodeIndex);
+  let i = 0;
+  let name = getVertexLabel(i);
   while (graph[name] || nodes[name]) {
-    nodeIndex++;
-    name = getVertexLabel(nodeIndex);
+    i++;
+    name = getVertexLabel(i);
   }
-  nodeIndex++;
+  nodeIndex = Math.max(nodeIndex, i + 1);
   return name;
+}
+
+// Called after every change to the vertex or edge set: anything computed for the old graph
+// (step-by-step BFS progress and its [k / n] counter, BFS layers, edge-collision list) is now stale.
+function notifyGraphChanged() {
+  if (window.stepBfsState) window.stepBfsState.active = false;
+
+  const bfsDisplayElem = getEl("bfsLayersDisplay");
+  if (bfsDisplayElem) bfsDisplayElem.innerText = "[]";
+
+  const edgeOverlapList = getEl("edgeOverlapList");
+  if (edgeOverlapList) {
+    window.lastEdgeOverlapClusterKeys = [];
+    edgeOverlapList.innerHTML = "";
+    const li = document.createElement("li");
+    li.style.color = "#27ae60";
+    li.style.fontWeight = "bold";
+    li.textContent = "None";
+    edgeOverlapList.appendChild(li);
+  }
+
+  const statusP = getEl("status");
+  if (statusP && window.isMetroMode) {
+    const v = Object.keys(graph).length;
+    let degree = 0;
+    for (const u in graph) degree += (graph[u] || []).length;
+    statusP.textContent = `Graph changed: ${v} vertices, ${degree / 2} edges. Run the layout again to update the drawing.`;
+  }
 }
 
 function initAppListeners() {
@@ -168,6 +198,7 @@ function addNode(nameOpt) {
   if (startNodeInp && !startNodeInp.value) startNodeInp.value = name;
   updateLists();
   updateCanvasSize(gridX, gridY);
+  notifyGraphChanged();
   if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
   if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 }
@@ -187,14 +218,24 @@ function selectNode(name) {
     }
 
     if (!graph[selected]) graph[selected] = [];
-    graph[selected].push({ to: name });
-
     if (!graph[name]) graph[name] = [];
+
+    // Do not add the same edge twice (a duplicate would be counted as an extra edge)
+    if (graph[selected].some(e => e.to === name)) {
+      const statusP = getEl("status");
+      if (statusP) statusP.textContent = `Edge ${selected} - ${name} already exists.`;
+      selected = null;
+      return;
+    }
+
+    graph[selected].push({ to: name });
     graph[name].push({ to: selected });
 
     selected = null;
     drawEdges();
     updateLists();
+    notifyGraphChanged();
+    if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
   }
 }
 
@@ -245,7 +286,7 @@ function updateLists() {
   vertexList.innerHTML = "";
   edgeList.innerHTML = "";
 
-  Object.keys(graph).sort().forEach(v => {
+  Object.keys(graph).sort(compareVertexLabels).forEach(v => {
     let opt = document.createElement("option");
     opt.value = v;
     opt.textContent = v;
@@ -289,8 +330,11 @@ function removeVertex() {
     startNodeInp.value = Object.keys(graph)[0] || "";
   }
 
+  if (selected === v) selected = null;
+
   drawEdges();
   updateLists();
+  notifyGraphChanged();
   if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
   if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 }
@@ -307,6 +351,7 @@ function removeEdge() {
 
   drawEdges();
   updateLists();
+  notifyGraphChanged();
   if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
   if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 }
@@ -707,9 +752,19 @@ function buildFromList() {
   let namesSet = new Set();
 
   lines.forEach(line => {
-    let [node] = line.split(":");
-    if (!node) return;
+    let [node, neighbors] = line.split(":");
+    if (!node || !node.trim()) return;
     namesSet.add(node.trim().toUpperCase());
+  });
+  // Vertices that only appear as neighbours (e.g. "A:B,C" without lines for B and C) are vertices too;
+  // without this they were counted in the graph but never drawn.
+  lines.forEach(line => {
+    let [node, neighbors] = line.split(":");
+    if (!node || !node.trim() || !neighbors) return;
+    neighbors.split(",").forEach(n => {
+      n = n.trim().toUpperCase();
+      if (n) namesSet.add(n);
+    });
   });
 
   let names = Array.from(namesSet);
@@ -717,7 +772,7 @@ function buildFromList() {
 
   lines.forEach(line => {
     let [node, neighbors] = line.split(":");
-    if (!node) return;
+    if (!node || !node.trim()) return;
     node = node.trim().toUpperCase();
 
     if (!graph[node]) graph[node] = [];
@@ -725,7 +780,7 @@ function buildFromList() {
 
     neighbors.split(",").forEach(n => {
       n = n.trim().toUpperCase();
-      if (!n) return;
+      if (!n || n === node) return;          // ignore empty names and self-loops
       if (!graph[n]) graph[n] = [];
       if (!graph[node].some(e => e.to === n)) {
         graph[node].push({ to: n });

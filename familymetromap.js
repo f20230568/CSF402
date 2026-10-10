@@ -585,7 +585,10 @@ function metroBranchPreference(g) {
   return table[String(g)] !== undefined ? table[String(g)] : 4;
 }
 
-function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLength = metroBaseSegmentLength()) {
+// layoutConfig (optional): { base, beamWidth, alphaFactor } chosen by the large-tree search (section 3b).
+// When it is not passed, trees with more than 100 vertices use the cached result of that search;
+// trees with at most 100 vertices always use the original settings (90 px, beam width 4, the given alpha).
+function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLength = metroBaseSegmentLength(), layoutConfig) {
   const coords = {};
   const orientations = {};
   const localBends = {};
@@ -593,6 +596,14 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
 
   if (!rootName || !graph[rootName]) {
     return { coords, bends: localBends, linesDrawn, orientations };
+  }
+
+  const largeCfg = (layoutConfig !== undefined) ? layoutConfig : getMetroLargeTreeConfig(rootName, alpha);
+  let beamWidth = METRO_BEAM_WIDTH;
+  if (largeCfg) {
+    baseSegmentLength = largeCfg.base;
+    alpha = alpha * largeCfg.alphaFactor;
+    beamWidth = largeCfg.beamWidth;
   }
 
   const startX = 350;
@@ -791,7 +802,7 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
       let next = expand(true);
       if (next.length === 0) next = expand(false);   // more than 7 children or conflicting overrides
       next.sort((a, b) => a.cost - b.cost);           // stable sort keeps the result deterministic
-      beam = next.slice(0, METRO_BEAM_WIDTH);
+      beam = next.slice(0, beamWidth);
     });
 
     const best = beam[0];
@@ -815,6 +826,87 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
   }
 
   return { coords, bends: localBends, linesDrawn, orientations };
+}
+
+// --- 3b. Large trees (more than 100 vertices): search over layout settings ---
+// For a large tree the single default run leaves many overlaps, so several settings are tried and the layout
+// with the fewest overlaps is kept (fewest overlapping vertex pairs first, then fewest colliding edge pairs).
+// Settings: starting edge length (factor f times the size-based length of metroBaseSegmentLength), beam
+// width B (1 = greedy), and an extra length shrink per generation (alphaFactor, effective alpha = alpha x factor).
+// Stages are tried in order; a later stage (more extra shrink) is only tried while overlaps remain, and on a
+// tie the earlier candidate wins, so the user's alpha is kept whenever that is enough. The first stage also
+// contains the previous default (f = 1, B = 4), so the result is never worse than before.
+// The choice is made once per tree / root / alpha (with no fixer overrides) and cached, so Run Full Metro
+// Layout, Step by Step BFS Draw, the overlap lists and the Fix buttons all use the same layout.
+const METRO_LARGE_TREE_MIN_VERTICES = 101;
+// The Overlapping Vertices panel measures whole-pixel positions on screen; rounding can shorten a distance by
+// up to sqrt(2) px, so the search counts pairs closer than 16 + 1.5 px as overlapping to be safe.
+const METRO_SEARCH_VERTEX_THRESHOLD_PX = 17.5;
+const METRO_LARGE_TREE_STAGES = [
+  // Within a stage, candidates go from shorter to longer edges, so the most compact clean layout wins.
+  { alphaFactor: 1.0, candidates: [ { f: 1, B: 4 }, { f: 1, B: 1 }, { f: 1, B: 2 }, { f: 1.25, B: 2 }, { f: 1.5, B: 2 },
+                                    { f: 1.75, B: 2 }, { f: 2, B: 1 }, { f: 2.5, B: 1 }, { f: 3, B: 2 } ] },
+  { alphaFactor: 0.8, candidates: [ { f: 1.5, B: 2 }, { f: 1.75, B: 2 }, { f: 3, B: 1 }, { f: 3, B: 2 } ] },
+  { alphaFactor: 0.7, candidates: [ { f: 1.25, B: 1 }, { f: 1.5, B: 1 }, { f: 1.75, B: 1 } ] },
+  { alphaFactor: 0.6, candidates: [ { f: 2, B: 1 }, { f: 2.5, B: 1 }, { f: 2.5, B: 2 } ] },
+  { alphaFactor: 0.5, candidates: [ { f: 2, B: 1 }, { f: 2.5, B: 2 }, { f: 3, B: 1 }, { f: 3, B: 2 } ] }
+];
+window.metroLargeTreeConfigCache = {};
+
+function metroGraphSignature() {
+  return Object.keys(graph).map(u => u + ":" + (graph[u] || []).map(e => e.to).join(",")).join(";");
+}
+
+function getMetroLargeTreeConfig(rootName, alpha) {
+  const n = Object.keys(graph).length;
+  if (n < METRO_LARGE_TREE_MIN_VERTICES || !rootName || !graph[rootName]) return null;
+
+  const key = metroGraphSignature() + "|" + rootName + "|" + alpha;
+  const cache = window.metroLargeTreeConfigCache || (window.metroLargeTreeConfigCache = {});
+  if (cache[key]) return cache[key];
+
+  // Search without any fixer overrides, then restore them
+  const hadOverrides = Object.prototype.hasOwnProperty.call(window.metroOverridesByRoot, rootName);
+  const savedOverrides = window.metroOverridesByRoot[rootName];
+  window.metroOverridesByRoot[rootName] = createEmptyOverrides();
+
+  const baseLen = metroBaseSegmentLength();
+  let best = null;
+  let tried = 0;
+  try {
+    for (const stage of METRO_LARGE_TREE_STAGES) {
+      for (const c of stage.candidates) {
+        const cfg = { base: baseLen * c.f, beamWidth: c.B, alphaFactor: stage.alphaFactor };
+        const q = metroLayoutQuality(generateFamilyMetroCoordinates(rootName, alpha, cfg.base, cfg), METRO_SEARCH_VERTEX_THRESHOLD_PX);
+        tried++;
+        if (!best ||
+            q.overlapCount < best.overlapCount ||
+            (q.overlapCount === best.overlapCount && q.lineIntersections < best.lineIntersections)) {
+          best = { base: cfg.base, beamWidth: cfg.beamWidth, alphaFactor: cfg.alphaFactor,
+                   overlapCount: q.overlapCount, lineIntersections: q.lineIntersections };
+        }
+        if (best.overlapCount === 0 && best.lineIntersections === 0) break;
+      }
+      if (best.overlapCount === 0 && best.lineIntersections === 0) break;
+    }
+  } finally {
+    if (hadOverrides) window.metroOverridesByRoot[rootName] = savedOverrides;
+    else delete window.metroOverridesByRoot[rootName];
+  }
+
+  best.tried = tried;
+  if (Object.keys(cache).length > 20) window.metroLargeTreeConfigCache = {};
+  window.metroLargeTreeConfigCache[key] = best;
+  return best;
+}
+
+function describeMetroLargeTreeConfig(cfg, alpha) {
+  if (!cfg) return "";
+  const parts = [`start edge ${Math.round(cfg.base)} px`, cfg.beamWidth === 1 ? "greedy placement" : `beam width ${cfg.beamWidth}`];
+  if (cfg.alphaFactor < 1) {
+    parts.push(`extra shrink ×${cfg.alphaFactor} per generation (effective α = ${+(alpha * cfg.alphaFactor).toFixed(3)})`);
+  }
+  return ` Large tree: best of ${cfg.tried} candidate layouts (${parts.join(", ")}).`;
 }
 
 // Helper to pre-calculate global offsets
@@ -919,7 +1011,8 @@ function runFamilyMetroMapLayout(alpha = 0.75, resetOverrides = true) {
   updateSummaryOfChangesSection(rootNode);
   
   if (statusElem) {
-    statusElem.innerText = `Family Metro Map layout applied (Root: ${rootNode}, α = ${alpha}). Blue = Male, Pink = Female.`;
+    statusElem.innerText = `Family Metro Map layout applied (Root: ${rootNode}, α = ${alpha}). Blue = Male, Pink = Female.` +
+      describeMetroLargeTreeConfig(getMetroLargeTreeConfig(rootNode, alpha), alpha);
   }
 }
 
@@ -1125,7 +1218,20 @@ function drawPartialMetroEdges(visibleSet) {
 
 // Layout Evaluation Metric: penalizes vertex overlaps, edge crossings, and touching lines
 function evaluateLayoutQuality(rootNode, alpha) {
-  const { coords, bends, linesDrawn, orientations } = generateFamilyMetroCoordinates(rootNode, alpha, metroBaseSegmentLength());
+  const layout = generateFamilyMetroCoordinates(rootNode, alpha, metroBaseSegmentLength());
+  const q = metroLayoutQuality(layout);
+  q.coords = layout.coords;
+  q.bends = layout.bends;
+  q.linesDrawn = layout.linesDrawn;
+  q.orientations = layout.orientations;
+  return q;
+}
+
+// Quality of a computed layout: overlapping vertex pairs (closer than 16 px), colliding edge pairs,
+// minimum vertex distance, and the combined cost used by the fixers.
+// vertexThreshold: vertices closer than this count as overlapping (16 px = the disk size).
+function metroLayoutQuality(layout, vertexThreshold = 16) {
+  const { coords, linesDrawn } = layout;
   const nodeKeys = Object.keys(coords);
   let overlapCount = 0;
   let minDistance = Infinity;
@@ -1135,7 +1241,7 @@ function evaluateLayoutQuality(rootNode, alpha) {
     for (let j = i + 1; j < nodeKeys.length; j++) {
       const u = nodeKeys[i], v = nodeKeys[j];
       const d = Math.hypot(coords[u].x - coords[v].x, coords[u].y - coords[v].y);
-      if (d < 16) {
+      if (d < vertexThreshold) {
         overlapCount++;
         overlappingPairs.push({ u, v, dist: Math.round(d) });
       }
@@ -1167,7 +1273,7 @@ function evaluateLayoutQuality(rootNode, alpha) {
   }
 
   const cost = (overlapCount * 100000) + (lineIntersections * 5000) - (minDistance === Infinity ? 0 : minDistance);
-  return { cost, overlapCount, lineIntersections, minDistance, overlappingPairs, collidingEdgePairs, coords, bends, linesDrawn, orientations };
+  return { cost, overlapCount, lineIntersections, minDistance, overlappingPairs, collidingEdgePairs };
 }
 
 // --- 6. Shared helpers for the overlap fixers ---

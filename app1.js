@@ -357,16 +357,35 @@ function removeEdge() {
 }
 
 function makeDraggable(el) {
-  let offsetX, offsetY;
   el.onmousedown = e => {
-    offsetX = e.offsetX;
-    offsetY = e.offsetY;
+    if (e.button !== 0) return;             // left button only
+    e.preventDefault();                     // no text selection or native drag while moving the vertex
+    const canvasDiv = getEl("canvas");
+    if (!canvasDiv) return;
+
+    // Delta-based drag: the vertex moves by exactly as much as the mouse moves from where it was pressed.
+    // Nothing depends on where the page or canvas sits, so page scrolling, canvas scrolling, borders,
+    // margins and CSS transforms on the vertex cannot make it jump.
+    const startMouseX = e.clientX;
+    const startMouseY = e.clientY;
+    const startLeft = parseFloat(el.style.left);
+    const startTop  = parseFloat(el.style.top);
+    const baseLeft = isNaN(startLeft) ? el.offsetLeft : startLeft;
+    const baseTop  = isNaN(startTop)  ? el.offsetTop  : startTop;
+    const startScrollLeft = canvasDiv.scrollLeft;
+    const startScrollTop  = canvasDiv.scrollTop;
+
+    // Screen pixels per CSS pixel of the canvas (1 normally; differs when the page uses CSS zoom/scale)
+    const canvasRect = canvasDiv.getBoundingClientRect();
+    const scaleX = (canvasDiv.offsetWidth  > 0 && canvasRect.width  > 0) ? canvasRect.width  / canvasDiv.offsetWidth  : 1;
+    const scaleY = (canvasDiv.offsetHeight > 0 && canvasRect.height > 0) ? canvasRect.height / canvasDiv.offsetHeight : 1;
+
     document.onmousemove = m => {
-      const canvasDiv = getEl("canvas");
-      if (!canvasDiv) return;
-      const rect = canvasDiv.getBoundingClientRect();
-      el.style.left = (m.pageX - rect.left - offsetX) + "px";
-      el.style.top  = (m.pageY - rect.top  - offsetY) + "px";
+      m.preventDefault();
+      const dx = (m.clientX - startMouseX) / scaleX + (canvasDiv.scrollLeft - startScrollLeft);
+      const dy = (m.clientY - startMouseY) / scaleY + (canvasDiv.scrollTop  - startScrollTop);
+      el.style.left = Math.round(baseLeft + dx) + "px";
+      el.style.top  = Math.round(baseTop  + dy) + "px";
       drawEdges();
       if (typeof updateCoords === "function") updateCoords();
       if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
@@ -374,6 +393,7 @@ function makeDraggable(el) {
     };
     document.onmouseup = () => {
       document.onmousemove = null;
+      document.onmouseup = null;
       if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
       //if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
     };

@@ -548,7 +548,7 @@ const METRO_BEAM_WIDTH = 4;
 // i.e. +30 px for every further band of 25 vertices. Larger trees need more room, because the
 // clearance thresholds (26 / 12 / 6 px) and the 34 px minimum link length do not grow with the tree.
 const METRO_BASE_SEGMENT_PX = 90;
-const METRO_BASE_STEP_PX = 30;          // added per band of 25 vertices above 100
+const METRO_BASE_STEP_PX = 0;          // added per band of 25 vertices above 100
 const METRO_BASE_BAND_SIZE = 25;
 const METRO_BASE_MAX_BANDS = 8;         // 276-300 vertices (the largest drawable tree)
 

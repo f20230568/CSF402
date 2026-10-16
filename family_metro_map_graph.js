@@ -1085,7 +1085,10 @@ const METRO_LARGE_TREE_STAGES = [
 window.metroLargeTreeConfigCache = {};
 
 function metroGraphSignature() {
-  return Object.keys(graph).map(u => u + ":" + (graph[u] || []).map(e => e.to).join(",")).join(";");
+  // Genders are part of the signature (male written as A_), so a cached search result is never reused
+  // after the genders change (Randomize Genders, or a list/matrix with other genders)
+  const g = v => v + (getNodeGender(v) === "M" ? "_" : "");
+  return Object.keys(graph).map(u => g(u) + ":" + (graph[u] || []).map(e => e.to).join(",")).join(";");
 }
 
 // The search is used for trees with more than 100 vertices (as in the tree version) and, when

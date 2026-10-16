@@ -1,0 +1,12 @@
+A:B_,E
+B_:A,C_,F
+C_:B_,D,G_
+D:C_,H
+E:A,F,I
+F:B_,E,G_,J
+G_:C_,F,H,K
+H:D,G_,L_
+I:E,J
+J:F,I,K
+K:G_,J,L_
+L_:H,K

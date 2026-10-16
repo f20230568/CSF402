@@ -84,9 +84,8 @@
 <div class="top-layout">
   <div class="controls-section">
     <h2>Family Metro Map Visualizer for Graphs</h2>
-    <a href="family_metro_map.html" style="color: blue;">← Go to the original Family Metro Map (trees only)</a>
-    <br>
-    <br>
+    <a href="family_metro_map.html" style="color: blue;">← Go to Family Metro Map (trees only)</a>
+    <br><br>
 
     <select id="mode" onchange="switchMode()">
       <option value="visual">Visual Builder</option>
@@ -100,14 +99,16 @@
     </div>
 
     <div id="listMode" style="display:none">
-      <textarea id="listInput" placeholder="A:B,C&#10;B:A,D&#10;C:A&#10;D:B"></textarea><br>
+      <textarea id="listInput" placeholder="A_:B,C_&#10;B:A_,D&#10;C_:A_&#10;D:B"></textarea><br>
+      <small>Male vertices end with an underscore (A_), female vertices have none (B).</small><br>
       <button id="showListGraphBtn">Show Graph</button>
       <input type="file" id="importListFile" accept=".txt">
       <button id="importListBtn">Import List</button>
     </div>
 
     <div id="matrixMode" style="display:none">
-      <textarea id="matrixInput" placeholder="0,1,1&#10;1,0,0&#10;1,0,0"></textarea><br>
+      <textarea id="matrixInput" placeholder="_0,1,1&#10;1,0,0&#10;_1,0,0"></textarea><br>
+      <small>A row starting with an underscore is a male vertex (_0,1,1); other rows are female.</small><br>
       <button id="showMatrixGraphBtn">Show Graph</button>
       <input type="file" id="importMatrixFile" accept=".txt">
       <button id="importMatrixBtn">Import Matrix</button>
@@ -139,6 +140,9 @@
         <button id="fixEdgeOverlapsBtn" onclick="fixMetroEdgeOverlaps(parseFloat(document.getElementById('metroAlpha').value))" style="background:#e67e22; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
           Fix Edge Overlaps
         </button>
+        <button id="randomGendersBtn" onclick="randomizeGenders(parseFloat(document.getElementById('metroAlpha').value))" style="background:#4a4a4a; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
+          Randomize Genders
+        </button>
         <button id="saveDrawingBtn" onclick="saveDrawingAsJPG()" style="background:#8e44ad; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
           Save Drawing
         </button>
@@ -163,7 +167,7 @@
 
   <div id="paperInfo">
     <h3>Korst, Pronk & van Wijk (2020)</h3>
-    <p>A schematic graph layout inspired by the London Underground map:</p>
+    <p>A schematic tree layout inspired by the London Underground map:</p>
     
     <strong>1. Graph Verification</strong>
     <p>Any <strong>undirected graph</strong> is allowed (cycles, several components) as long as every vertex has

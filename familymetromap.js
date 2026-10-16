@@ -540,6 +540,28 @@ const METRO_ABS_MIN_SEGMENT_PX = 20;   // hard floor even when a sub-tree is shr
 const METRO_NODE_CLEARANCE_PX = 26;    // a new vertex closer than this to another vertex is a conflict
 const METRO_LINE_CLEARANCE_PX = 12;    // a vertex closer than this to a foreign line is a conflict
 const METRO_BEAM_WIDTH = 4;
+// Gender rule for the shape of every link:
+//   female - female : straight, horizontal / vertical (continuing the line or a T-junction)
+//   male   - male   : straight, diagonal
+//   female - male   : exactly one 45 deg bend
+// A vertex's own lines (orientation k) are always in its gender's direction class (even = female,
+// odd = male), so the branch offset g (in units of 45 deg relative to the parent's orientation) decides it:
+//   same gender      : g even only (0, +-2, and 4 at the root) -> straight link.
+//   different gender : g even -> the link leaves in the parent's class and bends into the child's class
+//                      (the paper's bended link, preferred);
+//                      g odd  -> the link leaves in the child's class and bends back by 45 deg, ending in the
+//                      parent's class ("reverse bend"). It is still a single bend, but it uses the 4
+//                      directions of the other class, so a vertex with many children of the other gender
+//                      does not run out of free directions. Its preference cost is higher, so it is only
+//                      used where the paper's bended link would collide.
+// g = 4 points back along the incoming line, so it is only usable at the root.
+const METRO_SAME_GENDER_BRANCH_OFFSETS = [0, 2, -2, 4];
+const METRO_MIXED_GENDER_BRANCH_OFFSETS = [0, 2, -2, 1, -1, 3, -3, 4];
+const METRO_REVERSE_BEND_PENALTY = 30;   // extra preference cost of a reverse bend (in units of the 12x pref term)
+
+function metroAllowedBranchOffsets(sameGender) {
+  return sameGender ? METRO_SAME_GENDER_BRANCH_OFFSETS : METRO_MIXED_GENDER_BRANCH_OFFSETS;
+}
 
 // Starting (base) edge length of the root's metro line, chosen by tree size.
 //   up to 100 vertices : 90 px (unchanged)
@@ -548,7 +570,7 @@ const METRO_BEAM_WIDTH = 4;
 // i.e. +30 px for every further band of 25 vertices. Larger trees need more room, because the
 // clearance thresholds (26 / 12 / 6 px) and the 34 px minimum link length do not grow with the tree.
 const METRO_BASE_SEGMENT_PX = 90;
-const METRO_BASE_STEP_PX = 0;          // added per band of 25 vertices above 100
+const METRO_BASE_STEP_PX = 30;          // added per band of 25 vertices above 100
 const METRO_BASE_BAND_SIZE = 25;
 const METRO_BASE_MAX_BANDS = 8;         // 276-300 vertices (the largest drawable tree)
 
@@ -586,8 +608,10 @@ function metroBranchPreference(g) {
 }
 
 // layoutConfig (optional): { base, beamWidth, alphaFactor } chosen by the large-tree search (section 3b).
-// When it is not passed, trees with more than 100 vertices use the cached result of that search;
-// trees with at most 100 vertices always use the original settings (90 px, beam width 4, the given alpha).
+// When it is not passed, the cached result of that search is used. The search starts with the original
+// settings (size-based start edge, beam width 4, the given alpha) and keeps them whenever they give a layout
+// without overlaps; other settings are only used when the original ones leave overlaps. For trees with at
+// most 100 vertices only the beam width is varied, so their edge lengths stay exactly as before.
 function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLength = metroBaseSegmentLength(), layoutConfig) {
   const coords = {};
   const orientations = {};
@@ -613,6 +637,7 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
   const ov = getActiveOverrides(rootName);
   const rootGender = getNodeGender(rootName, rootName);
   orientations[rootName] = rootGender === "F" ? 2 : 3;
+  const arrivalDir = { [rootName]: orientations[rootName] };   // direction in which the link into v arrives
 
   // Rooted structure of the tree (BFS order = generation by generation)
   const parentOf = {};
@@ -650,7 +675,11 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
     const forcedG = readEdgeOverride(ov.angleOffsets, u, v);
     const forcedTurn = readEdgeOverride(ov.turnDirections, u, v);
     const edgeScale = readEdgeOverride(ov.edgeScaleFactors, u, v) || 1.0;
-    const gList = forcedG !== undefined ? [forcedG] : [0, 2, -2, 1, -1, 3, -3, 4];
+    // Gender rule (see METRO_SAME_GENDER_BRANCH_OFFSETS): same gender -> straight link with an even offset,
+    // different gender -> one 45 deg bend (paper's bended link for even g, reverse bend for odd g).
+    const sameGender = getNodeGender(u, rootName) === vGender;
+    const allowedG = metroAllowedBranchOffsets(sameGender);
+    const gList = (forcedG !== undefined && allowedG.includes(forcedG)) ? [forcedG] : allowedG;
 
     const opts = [];
     gList.forEach(g => {
@@ -659,14 +688,15 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
       let len = Math.max(baseSegmentLength * Math.pow(alpha, lg), METRO_MIN_SEGMENT_PX);
       len = Math.max(len * edgeScale * scaleMul[u], METRO_ABS_MIN_SEGMENT_PX);
 
-      const straight = (firstDir % 2 === 0) === (vGender === "F");
+      const reverse = !sameGender && (g % 2 !== 0);   // mixed link leaving in the child's class
       let sList;
-      if (straight) sList = [0];
+      if (sameGender) sList = [0];
       else if (forcedTurn === 1 || forcedTurn === -1) sList = [forcedTurn];
       else sList = [1, -1];
 
       sList.forEach(sTurn => {
-        opts.push({ g, s: sTurn, firstDir, lg, len, pref: metroBranchPreference(g) });
+        const pref = metroBranchPreference(g) + (reverse ? METRO_REVERSE_BEND_PENALTY : 0);
+        opts.push({ g, s: sTurn, firstDir, lg, len, pref, reverse });
       });
     });
     return opts;
@@ -751,7 +781,7 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
 
     const uPos = coords[u];
     const blocked = new Set();
-    if (u !== rootName) blocked.add((orientations[u] + 4) % 8);   // the incoming metro line
+    if (u !== rootName) blocked.add((arrivalDir[u] + 4) % 8);   // the incoming metro line
 
     // Spatial pruning: only geometry near u can interact with the new links or the look-ahead samples
     const optsByKid = {};
@@ -766,7 +796,16 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
 
     let beam = [{ cost: 0, items: [] }];
 
-    kids.forEach(v => {
+    // Same-gender children can only use the 4 directions of u's class (straight links), while children of
+    // the other gender can also use the other class (reverse bend). So a link may only take a direction of
+    // u's class if enough of them stay free for the same-gender children that are placed after it.
+    const uGender = getNodeGender(u, rootName);
+    const uClass = orientations[u] % 2;
+    const sameGenderAfter = kids.map((_, i) =>
+      kids.slice(i + 1).filter(w => getNodeGender(w, rootName) === uGender).length);
+    const ownClassDirs = [0, 1, 2, 3, 4, 5, 6, 7].filter(d => d % 2 === uClass);
+
+    kids.forEach((v, kidIdx) => {
       const opts = optsByKid[v];
 
       const expand = (enforceDistinct) => {
@@ -776,7 +815,15 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
           state.items.forEach(it => used.add(it.firstDir));
           opts.forEach(opt => {
             if (enforceDistinct && used.has(opt.firstDir)) return;
+            if (enforceDistinct && opt.firstDir % 2 === uClass) {
+              const freeAfter = ownClassDirs.filter(d => !used.has(d) && d !== opt.firstDir).length;
+              if (freeAfter < sameGenderAfter[kidIdx]) return;
+            }
             const geom = metroEdgeGeometry(uPos, opt.firstDir, opt.s, opt.len);
+            // The child's own lines continue in its gender class: the arrival direction for a straight or
+            // normal bended link, the first direction for a reverse bend.
+            geom.arrivalK = geom.finalK;
+            if (opt.reverse) geom.finalK = opt.firstDir;
             let score = scorePlacement(u, v, geom, opt.len, state.items, nearNodes, nearSegs);
             score += opt.pref * 12;
             // c2-like term: prefer positions far from the rest of the drawing on average
@@ -790,7 +837,7 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
             out.push({
               cost: state.cost + score,
               items: state.items.concat([{
-                v, pos: geom.pos, bend: geom.bend, finalK: geom.finalK,
+                v, pos: geom.pos, bend: geom.bend, finalK: geom.finalK, arrivalK: geom.arrivalK,
                 firstDir: opt.firstDir, lg: opt.lg, segs
               }])
             });
@@ -810,6 +857,7 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
       const v = it.v;
       coords[v] = it.pos;
       orientations[v] = it.finalK;
+      arrivalDir[v] = it.arrivalK;
       lineGen[v] = it.lg;
       scaleMul[v] = scaleMul[u] * (ov.subtreeScaleFactors[v] || 1);
       placedNames.push(v);
@@ -828,8 +876,9 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
   return { coords, bends: localBends, linesDrawn, orientations };
 }
 
-// --- 3b. Large trees (more than 100 vertices): search over layout settings ---
-// For a large tree the single default run leaves many overlaps, so several settings are tried and the layout
+// --- 3b. Search over layout settings (all trees with at least 2 vertices) ---
+// With the gender rule (same gender = straight, different gender = one bend) a vertex has fewer free
+// directions, so a single default run can leave overlaps even for small trees. Several settings are tried and the layout
 // with the fewest overlaps is kept (fewest overlapping vertex pairs first, then fewest colliding edge pairs).
 // Settings: starting edge length (factor f times the size-based length of metroBaseSegmentLength), beam
 // width B (1 = greedy), and an extra length shrink per generation (alphaFactor, effective alpha = alpha x factor).
@@ -838,7 +887,7 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
 // contains the previous default (f = 1, B = 4), so the result is never worse than before.
 // The choice is made once per tree / root / alpha (with no fixer overrides) and cached, so Run Full Metro
 // Layout, Step by Step BFS Draw, the overlap lists and the Fix buttons all use the same layout.
-const METRO_LARGE_TREE_MIN_VERTICES = 101;
+const METRO_LARGE_TREE_MIN_VERTICES = 2;   // was 101 before the gender rule; the first candidate is the default layout
 // The Overlapping Vertices panel measures whole-pixel positions on screen; rounding can shorten a distance by
 // up to sqrt(2) px, so the search counts pairs closer than 16 + 1.5 px as overlapping to be safe.
 const METRO_SEARCH_VERTEX_THRESHOLD_PX = 17.5;
@@ -851,10 +900,19 @@ const METRO_LARGE_TREE_STAGES = [
   { alphaFactor: 0.6, candidates: [ { f: 2, B: 1 }, { f: 2.5, B: 1 }, { f: 2.5, B: 2 } ] },
   { alphaFactor: 0.5, candidates: [ { f: 2, B: 1 }, { f: 2.5, B: 2 }, { f: 3, B: 1 }, { f: 3, B: 2 } ] }
 ];
+// Trees with at most 100 vertices keep their edge lengths exactly as before (start edge 90 px, the given
+// alpha, no extra shrink): only the placement search (beam width) is varied, which never changes a length.
+const METRO_SMALL_TREE_MAX_VERTICES = 100;
+const METRO_SMALL_TREE_STAGES = [
+  { alphaFactor: 1.0, candidates: [ { f: 1, B: 4 }, { f: 1, B: 1 }, { f: 1, B: 2 }, { f: 1, B: 3 },
+                                    { f: 1, B: 6 }, { f: 1, B: 8 }, { f: 1, B: 12 } ] }
+];
 window.metroLargeTreeConfigCache = {};
 
 function metroGraphSignature() {
-  return Object.keys(graph).map(u => u + ":" + (graph[u] || []).map(e => e.to).join(",")).join(";");
+  // Genders are part of the signature: they decide which links are straight or bent, so a gender change
+  // (e.g. Randomize Genders) needs a new search.
+  return Object.keys(graph).map(u => u + getNodeGender(u) + ":" + (graph[u] || []).map(e => e.to).join(",")).join(";");
 }
 
 function getMetroLargeTreeConfig(rootName, alpha) {
@@ -874,7 +932,8 @@ function getMetroLargeTreeConfig(rootName, alpha) {
   let best = null;
   let tried = 0;
   try {
-    for (const stage of METRO_LARGE_TREE_STAGES) {
+    const stages = n <= METRO_SMALL_TREE_MAX_VERTICES ? METRO_SMALL_TREE_STAGES : METRO_LARGE_TREE_STAGES;
+    for (const stage of stages) {
       for (const c of stage.candidates) {
         const cfg = { base: baseLen * c.f, beamWidth: c.B, alphaFactor: stage.alphaFactor };
         const q = metroLayoutQuality(generateFamilyMetroCoordinates(rootName, alpha, cfg.base, cfg), METRO_SEARCH_VERTEX_THRESHOLD_PX);
@@ -906,7 +965,8 @@ function describeMetroLargeTreeConfig(cfg, alpha) {
   if (cfg.alphaFactor < 1) {
     parts.push(`extra shrink ×${cfg.alphaFactor} per generation (effective α = ${+(alpha * cfg.alphaFactor).toFixed(3)})`);
   }
-  return ` Large tree: best of ${cfg.tried} candidate layouts (${parts.join(", ")}).`;
+  if (cfg.tried === 1) return "";   // the default layout was already free of overlaps
+  return ` Layout search: best of ${cfg.tried} candidate layouts (${parts.join(", ")}).`;
 }
 
 // Helper to pre-calculate global offsets
@@ -1281,7 +1341,8 @@ function metroLayoutQuality(layout, vertexThreshold = 16) {
 // flipping sub-trees"): they force the binary choices (branch side g, bend sign s) of one link at a time and let
 // the layout algorithm re-place everything below it, and as a last resort they shrink a whole sub-tree locally
 // (Lemma 4.3: a small enough shrinking factor always separates neighbouring sub-trees).
-// Gender is never changed: the generalized orientation rule allows any branch direction for either gender.
+// Gender is never changed, and the fixers keep the gender rule: they only try the branch offsets it allows,
+// so same-gender links stay straight and mixed-gender links keep exactly one bend.
 // Evaluation budget of one fixer run (deterministic; smaller for big trees because each evaluation costs more)
 function metroFixBudget() {
   const n = Object.keys(graph).length || 1;
@@ -1308,19 +1369,15 @@ function buildMetroParentMap(rootNode) {
 // All (g, s) combinations worth trying for the link parent -> target. "undefined" means: leave the choice to
 // the layout algorithm. Turn variants are skipped when the chosen direction gives a straight link.
 function buildMetroFixTrials(rootNode, parentNode, targetNode, orientations) {
-  const gChoices = [undefined, 2, -2, 0, 1, -1, 3, -3];
+  // Only offsets allowed by the gender rule (see METRO_SAME_GENDER_BRANCH_OFFSETS)
+  const sameGender = getNodeGender(targetNode, rootNode) === getNodeGender(parentNode, rootNode);
+  const gChoices = [undefined].concat(metroAllowedBranchOffsets(sameGender).filter(g => g !== 4));
   if (parentNode === rootNode) gChoices.push(4);
-  const targetIsF = getNodeGender(targetNode, rootNode) === "F";
-  const parentK = orientations && orientations[parentNode] !== undefined ? orientations[parentNode] : 0;
 
   const trials = [];
   gChoices.forEach(g => {
     let turnChoices = [undefined, 1, -1];
-    if (g !== undefined) {
-      const firstDir = ((parentK + g) % 8 + 8) % 8;
-      const straight = (firstDir % 2 === 0) === targetIsF;
-      if (straight) turnChoices = [undefined];
-    }
+    if (sameGender) turnChoices = [undefined];   // same-gender links are always straight
     turnChoices.forEach(t => {
       if (g === undefined && t === undefined) return;   // identical to the current layout
       trials.push({ g, t });
@@ -1691,6 +1748,42 @@ function fixMetroEdgeOverlaps(alpha = 0.75) {
   }
 }
 window.fixMetroEdgeOverlaps = fixMetroEdgeOverlaps;
+
+// --- 6C. Randomize Genders ---
+// Gives every vertex a random gender (50 / 50) and draws the tree again with Run Full Metro Layout.
+// The gender is stored on the vertex (data-gender), so it is kept by every later run, step-by-step draw,
+// fixer and drag until the genders are randomized again or the graph is rebuilt.
+function randomizeGendersAndRedraw(alpha = 0.75) {
+  const statusElem = getDomEl("status");
+  const names = Object.keys(graph);
+  if (names.length === 0) {
+    alert("Please add vertices to build a tree.");
+    return;
+  }
+
+  let females = 0, males = 0;
+  names.forEach(name => {
+    const gender = Math.random() < 0.5 ? "F" : "M";
+    if (gender === "F") females++; else males++;
+    if (nodes[name]) {
+      nodes[name].dataset.gender = gender;
+      nodes[name].classList.remove("node-male", "node-female");
+      nodes[name].classList.add(gender === "M" ? "node-male" : "node-female");
+    }
+  });
+
+  // Earlier fixer overrides (and gender flips) belong to the old genders
+  window.metroOverridesByRoot = {};
+  window.metroChangeSummaryByRoot = {};
+  if (window.stepBfsState) window.stepBfsState.active = false;
+
+  runFamilyMetroMapLayout(alpha, true);
+
+  if (statusElem && verifyGraphIsTree().isTree) {
+    statusElem.innerText = `Genders randomized (${females} female, ${males} male) and tree redrawn. ` + statusElem.innerText;
+  }
+}
+window.randomizeGendersAndRedraw = randomizeGendersAndRedraw;
 
 // --- 7. Save Canvas as JPG ---
 function saveDrawingAsJPG() {

@@ -165,6 +165,8 @@ function distToSegment(p, v, w) {
 
 // Detect edge overlap, collinearity, crossing, or touching between two segments
 // Returns: { result: true/false, type: 'overlap' | 'touch' | null }
+const METRO_NO_COLLISION = Object.freeze({ result: false, type: null });
+
 function analyzeEdgeCollision(p1, p2, p3, p4, tolerance = 6.0) {
   // Fast reject: if the bounding boxes are further apart than the tolerance, the segments can neither
   // cross, share an endpoint, nor come within the touching distance (pure speed-up, same results).
@@ -172,7 +174,7 @@ function analyzeEdgeCollision(p1, p2, p3, p4, tolerance = 6.0) {
       Math.min(p3.x, p4.x) - Math.max(p1.x, p2.x) > tolerance ||
       Math.min(p1.y, p2.y) - Math.max(p3.y, p4.y) > tolerance ||
       Math.min(p3.y, p4.y) - Math.max(p1.y, p2.y) > tolerance) {
-    return { result: false, type: null };
+    return METRO_NO_COLLISION;
   }
 
   function ccw(A, B, C) {
@@ -576,6 +578,11 @@ const METRO_ABS_MIN_SEGMENT_PX = 20;   // hard floor even when a sub-tree is shr
 const METRO_NODE_CLEARANCE_PX = 26;    // a new vertex closer than this to another vertex is a conflict
 const METRO_LINE_CLEARANCE_PX = 12;    // a vertex closer than this to a foreign line is a conflict
 const METRO_BEAM_WIDTH = 4;
+// Weights of the soft terms of a placement's score (the hard terms, vertex and edge conflicts, always dominate):
+// clear = keep 0.9 x link length free around the new vertex, room = free room for the child's sub-tree,
+// pref = metro preferences (continue the line, then T-junctions, ...), avg = stay far from the drawing on average.
+// The layout search (section 3b) also tries a few other weightings; none of them changes an edge length.
+const METRO_DEFAULT_WEIGHTS = { clear: 40, room: 1, pref: 12, avg: 0.02 };
 
 // Starting (base) edge length of the root's metro line, chosen by tree size.
 //   up to 100 vertices : 90 px (unchanged)
@@ -680,7 +687,10 @@ function metroBoundingBox(coords, bends) {
 // When it is not passed, the cached result of that search is used where it applies (trees with more than
 // 100 vertices, graphs with cycles); trees with at most 100 vertices always use the original settings
 // (90 px, beam width 4, the given alpha), so trees are drawn exactly as by the tree version.
-function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLength = metroBaseSegmentLength(), layoutConfig) {
+// trace (optional, used by the automatic repair to save time): trace.record receives the links chosen at every
+// vertex; with trace.replay = { decisions, until }, vertices placed before `until` (and every vertex of another
+// component) reuse the recorded links instead of searching again (valid when only links leaving `until` changed).
+function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLength = metroBaseSegmentLength(), layoutConfig, trace) {
   const coords = {};
   const orientations = {};
   const localBends = {};
@@ -692,10 +702,12 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
 
   const largeCfg = (layoutConfig !== undefined) ? layoutConfig : getMetroLargeTreeConfig(rootName, alpha);
   let beamWidth = METRO_BEAM_WIDTH;
+  let weights = METRO_DEFAULT_WEIGHTS;
   if (largeCfg) {
     baseSegmentLength = largeCfg.base;
     alpha = alpha * largeCfg.alphaFactor;
     beamWidth = largeCfg.beamWidth;
+    if (largeCfg.weights) weights = largeCfg.weights;
   }
 
   const ov = getActiveOverrides(rootName);
@@ -703,13 +715,13 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
 
   // Connected graph: one component, drawn exactly where the tree version draws it
   if (compRoots.length === 1) {
-    return metroLayoutComponent(rootName, rootName, alpha, baseSegmentLength, beamWidth, ov);
+    return metroLayoutComponent(rootName, rootName, alpha, baseSegmentLength, beamWidth, ov, weights, trace);
   }
 
   // Several components: each is laid out on its own and placed to the right of the previous ones
   let box = null;
   compRoots.forEach((compRoot, idx) => {
-    const part = metroLayoutComponent(compRoot, rootName, alpha, baseSegmentLength, beamWidth, ov);
+    const part = metroLayoutComponent(compRoot, rootName, alpha, baseSegmentLength, beamWidth, ov, weights, trace);
     let dx = 0, dy = 0;
     if (idx > 0) {
       const pb = metroBoundingBox(part.coords, part.bends);
@@ -737,11 +749,50 @@ function generateFamilyMetroCoordinates(rootName, alpha = 0.75, baseSegmentLengt
 // flips are stored under it). Tree edges of the BFS spanning tree are placed by the beam search exactly as in
 // the tree version; cycle edges are routed when their second endpoint is placed, and their cost (crossings,
 // passing through vertices, bends) is part of that endpoint's placement score.
-function metroLayoutComponent(rootName, mainRoot, alpha, baseSegmentLength, beamWidth, ov) {
+function metroLayoutComponent(rootName, mainRoot, alpha, baseSegmentLength, beamWidth, ov, W = METRO_DEFAULT_WEIGHTS, trace) {
   const coords = {};
   const orientations = {};
   const localBends = {};
   const linesDrawn = [];
+  // Spatial index of linesDrawn (uniform grid), so a cycle route is only checked against lines near it
+  const GRID_CELL = 80;
+  const lineGrid = new Map();
+  let lineStamp = 0;
+  const lineSeen = [];
+  function addLine(sg) {
+    const id = linesDrawn.length;
+    linesDrawn.push(sg);
+    lineSeen.push(0);
+    const cx0 = Math.floor((Math.min(sg.p1.x, sg.p2.x) - 6) / GRID_CELL), cx1 = Math.floor((Math.max(sg.p1.x, sg.p2.x) + 6) / GRID_CELL);
+    const cy0 = Math.floor((Math.min(sg.p1.y, sg.p2.y) - 6) / GRID_CELL), cy1 = Math.floor((Math.max(sg.p1.y, sg.p2.y) + 6) / GRID_CELL);
+    for (let cx = cx0; cx <= cx1; cx++) {
+      for (let cy = cy0; cy <= cy1; cy++) {
+        const key = cx + "," + cy;
+        let cell = lineGrid.get(key);
+        if (!cell) { cell = []; lineGrid.set(key, cell); }
+        cell.push(id);
+      }
+    }
+  }
+  // Calls fn once for every drawn line whose (grown) bounding box can meet one of the boxes
+  function forLinesNear(boxes, fn) {
+    lineStamp++;
+    for (const b of boxes) {
+      const cx0 = Math.floor(b.x0 / GRID_CELL), cx1 = Math.floor(b.x1 / GRID_CELL);
+      const cy0 = Math.floor(b.y0 / GRID_CELL), cy1 = Math.floor(b.y1 / GRID_CELL);
+      for (let cx = cx0; cx <= cx1; cx++) {
+        for (let cy = cy0; cy <= cy1; cy++) {
+          const cell = lineGrid.get(cx + "," + cy);
+          if (!cell) continue;
+          for (const id of cell) {
+            if (lineSeen[id] === lineStamp) continue;
+            lineSeen[id] = lineStamp;
+            fn(linesDrawn[id]);
+          }
+        }
+      }
+    }
+  }
 
   const startX = 350;
   const startY = 220;
@@ -822,73 +873,84 @@ function metroLayoutComponent(rootName, mainRoot, alpha, baseSegmentLength, beam
     return opts;
   }
 
-  // Score of placing one link, given committed geometry plus the tentative siblings of this beam state
+  // Score of placing one link = part from the committed geometry (the same for every beam state, so it is
+  // computed once per candidate link) + part from the tentative siblings of the beam state.
   // nearNodes / nearSegs: committed geometry within reach of u (everything farther away cannot change the score)
-  function scorePlacement(u, v, geom, len, tentative, nearNodes, nearSegs) {
+  function committedPart(u, v, geom, len, nearNodes, nearSegs) {
     const uPos = coords[u];
     const pos = geom.pos;
     const newSegs = geom.bend
       ? [{ p1: uPos, p2: geom.bend }, { p1: geom.bend, p2: pos }]
       : [{ p1: uPos, p2: pos }];
+    const part = { vertexConf: 0, edgeConf: 0, clearance: Infinity, room: Infinity, newSegs, samples: null };
 
-    let vertexConf = 0;
-    let edgeConf = 0;
-    let clearance = Infinity;
+    for (const n of nearNodes) {
+      if (n === u) continue;
+      scoreNode(part, pos, newSegs, coords[n]);
+    }
+    for (const ex of nearSegs) scoreSeg(part, uPos, pos, newSegs, ex);
 
-    const checkNode = (name, pt) => {
-      if (name === u) return;
-      const dn = Math.hypot(pt.x - pos.x, pt.y - pos.y);
-      if (dn < METRO_NODE_CLEARANCE_PX) vertexConf++;
-      if (dn < clearance) clearance = dn;
-      newSegs.forEach(sg => {
-        if (distToSegment(pt, sg.p1, sg.p2) < METRO_LINE_CLEARANCE_PX) vertexConf++;
-      });
-    };
-    nearNodes.forEach(n => checkNode(n, coords[n]));
-    tentative.forEach(it => checkNode(it.v, it.pos));
-
-    const checkSeg = (ex) => {
-      const incidentToU = samePoint(ex.p1, uPos) || samePoint(ex.p2, uPos);
-      const ds = distToSegment(pos, ex.p1, ex.p2);
-      if (ds < METRO_LINE_CLEARANCE_PX) vertexConf++;
-      if (!incidentToU && ds * 1.5 < clearance) clearance = ds * 1.5;
-      newSegs.forEach(sg => {
-        if (analyzeEdgeCollision(sg.p1, sg.p2, ex.p1, ex.p2, 6.0).result) edgeConf++;
-      });
-    };
-    nearSegs.forEach(checkSeg);
-    tentative.forEach(it => it.segs.forEach(checkSeg));
-
-    // Free room in front of v for its own sub-tree (one-step look-ahead)
-    let roomPenalty = 0;
+    // Free room in front of v for its own sub-tree (one-step look-ahead): two sample points along v's line
     if (childrenOf[v] && childrenOf[v].length > 0) {
       const a = getBaseAngle(geom.finalK);
-      let room = Infinity;
-      [0.6, 1.2].forEach(t => {
-        const sp = { x: pos.x + t * len * Math.cos(a), y: pos.y + t * len * Math.sin(a) };
-        nearNodes.forEach(n => {
-          if (n === u) return;
-          room = Math.min(room, Math.hypot(coords[n].x - sp.x, coords[n].y - sp.y));
-        });
-        tentative.forEach(it => {
-          room = Math.min(room, Math.hypot(it.pos.x - sp.x, it.pos.y - sp.y));
-        });
-        nearSegs.forEach(ex => {
-          if (samePoint(ex.p1, uPos) || samePoint(ex.p2, uPos)) return;
-          room = Math.min(room, distToSegment(sp, ex.p1, ex.p2));
-        });
-      });
+      part.samples = [0.6, 1.2].map(t => ({ x: pos.x + t * len * Math.cos(a), y: pos.y + t * len * Math.sin(a) }));
+      for (const sp of part.samples) {
+        for (const n of nearNodes) {
+          if (n === u) continue;
+          part.room = Math.min(part.room, Math.hypot(coords[n].x - sp.x, coords[n].y - sp.y));
+        }
+        for (const ex of nearSegs) {
+          if (samePoint(ex.p1, uPos) || samePoint(ex.p2, uPos)) continue;
+          part.room = Math.min(part.room, distToSegment(sp, ex.p1, ex.p2));
+        }
+      }
+    }
+    return part;
+  }
+
+  function scoreNode(acc, pos, newSegs, pt) {
+    const dn = Math.hypot(pt.x - pos.x, pt.y - pos.y);
+    if (dn < METRO_NODE_CLEARANCE_PX) acc.vertexConf++;
+    if (dn < acc.clearance) acc.clearance = dn;
+    for (const sg of newSegs) {
+      if (distToSegment(pt, sg.p1, sg.p2) < METRO_LINE_CLEARANCE_PX) acc.vertexConf++;
+    }
+  }
+
+  function scoreSeg(acc, uPos, pos, newSegs, ex) {
+    const incidentToU = samePoint(ex.p1, uPos) || samePoint(ex.p2, uPos);
+    const ds = distToSegment(pos, ex.p1, ex.p2);
+    if (ds < METRO_LINE_CLEARANCE_PX) acc.vertexConf++;
+    if (!incidentToU && ds * 1.5 < acc.clearance) acc.clearance = ds * 1.5;
+    for (const sg of newSegs) {
+      if (analyzeEdgeCollision(sg.p1, sg.p2, ex.p1, ex.p2, 6.0).result) acc.edgeConf++;
+    }
+  }
+
+  function scorePlacement(u, v, geom, len, tentative, base) {
+    const uPos = coords[u];
+    const pos = geom.pos;
+    const acc = { vertexConf: base.vertexConf, edgeConf: base.edgeConf, clearance: base.clearance };
+    for (const it of tentative) scoreNode(acc, pos, base.newSegs, it.pos);
+    for (const it of tentative) for (const ex of it.segs) scoreSeg(acc, uPos, pos, base.newSegs, ex);
+
+    let roomPenalty = 0;
+    if (base.samples) {
+      let room = base.room;
+      for (const sp of base.samples) {
+        for (const it of tentative) room = Math.min(room, Math.hypot(it.pos.x - sp.x, it.pos.y - sp.y));
+      }
       if (room === Infinity) room = len;
       const weight = Math.min(subtreeSize[v] - 1, 4) / 2;
       roomPenalty = Math.max(0, len - room) * 15 * weight;
     }
 
-    if (clearance === Infinity) clearance = len;
+    const clearance = acc.clearance === Infinity ? len : acc.clearance;
 
-    return vertexConf * 1e6
-      + edgeConf * 1e5
-      + Math.max(0, 0.9 * len - clearance) * 40
-      + roomPenalty;
+    return acc.vertexConf * 1e6
+      + acc.edgeConf * 1e5
+      + Math.max(0, 0.9 * len - clearance) * W.clear
+      + roomPenalty * W.room;
     // (preference and average-distance terms are added by the caller)
   }
 
@@ -896,30 +958,47 @@ function metroLayoutComponent(rootName, mainRoot, alpha, baseSegmentLength, beam
   // Cost: 1e6 per vertex the route passes through (closer than 12 px), 1e5 per crossing / touching edge or
   // shared start direction, plus a small bend penalty and a penalty for a bend very close to a vertex.
   // ownSegs: the candidate's own tree link and the cycle edges of v routed before this one.
-  function routeCycleEdge(v, vPos, w, wPos, state, ownSegs) {
+  // committedCache (optional): costs from the committed geometry per shape, shared by all beam states
+  // (only valid while w's position is committed, i.e. the same for every state).
+  function routeCycleEdge(v, vPos, w, wPos, state, ownSegs, committedCache) {
     const shapes = metroCycleEdgeShapes(wPos, vPos);
     if (shapes.length === 0) {
       return { w, cost: 1e6, segs: [], bend: null, portW: null, portV: null };   // v placed on top of w
     }
     let best = null;
-    shapes.forEach(sh => {
-      let c = sh.bend ? METRO_CYCLE_BEND_PENALTY : 0;
-      if (sh.minSeg < METRO_CYCLE_SHORT_SEGMENT_PX) c += (METRO_CYCLE_SHORT_SEGMENT_PX - sh.minSeg) * 4;
-      c += METRO_CYCLE_LENGTH_WEIGHT * sh.length;
-
+    shapes.forEach((sh, si) => {
       const checkVertex = (name, pt) => {
         if (name === v || name === w) return;
         sh.segs.forEach(sg => { if (nearSegment(pt, sg, METRO_LINE_CLEARANCE_PX)) c += 1e6; });
       };
-      placedNames.forEach(n => checkVertex(n, coords[n]));
-      state.items.forEach(it => checkVertex(it.v, it.pos));
-
+      // Bounding boxes of the route's segments (grown by the 6 px touching distance) for a quick reject
+      const boxes = sh.segs.map(sg => ({
+        x0: Math.min(sg.p1.x, sg.p2.x) - 6, x1: Math.max(sg.p1.x, sg.p2.x) + 6,
+        y0: Math.min(sg.p1.y, sg.p2.y) - 6, y1: Math.max(sg.p1.y, sg.p2.y) + 6 }));
       const checkSeg = ex => {
-        sh.segs.forEach(sg => {
+        const ex0 = ex.p1.x < ex.p2.x ? ex.p1.x : ex.p2.x, ex1 = ex.p1.x < ex.p2.x ? ex.p2.x : ex.p1.x;
+        const ey0 = ex.p1.y < ex.p2.y ? ex.p1.y : ex.p2.y, ey1 = ex.p1.y < ex.p2.y ? ex.p2.y : ex.p1.y;
+        for (let k = 0; k < sh.segs.length; k++) {
+          const b = boxes[k];
+          if (ex1 < b.x0 || ex0 > b.x1 || ey1 < b.y0 || ey0 > b.y1) continue;
+          const sg = sh.segs[k];
           if (analyzeEdgeCollision(sg.p1, sg.p2, ex.p1, ex.p2, 6.0).result) c += 1e5;
-        });
+        }
       };
-      linesDrawn.forEach(checkSeg);
+
+      let c;
+      if (committedCache && committedCache[si] !== undefined) {
+        c = committedCache[si];
+      } else {
+        c = sh.bend ? METRO_CYCLE_BEND_PENALTY : 0;
+        if (sh.minSeg < METRO_CYCLE_SHORT_SEGMENT_PX) c += (METRO_CYCLE_SHORT_SEGMENT_PX - sh.minSeg) * 4;
+        c += METRO_CYCLE_LENGTH_WEIGHT * sh.length;
+        placedNames.forEach(n => checkVertex(n, coords[n]));
+        forLinesNear(boxes, checkSeg);
+        if (committedCache) committedCache[si] = c;
+      }
+
+      state.items.forEach(it => checkVertex(it.v, it.pos));
       state.items.forEach(it => it.segs.forEach(checkSeg));
       ownSegs.forEach(checkSeg);
 
@@ -930,7 +1009,15 @@ function metroLayoutComponent(rootName, mainRoot, alpha, baseSegmentLength, beam
     return best;
   }
 
+  // Replay (automatic repair): in the component that contains `until`, the vertices before it are replayed;
+  // the other components did not change at all and are replayed completely.
+  let replaying = !!(trace && trace.replay && trace.replay.decisions);
   for (const u of order) {
+    if (replaying && u === trace.replay.until) replaying = false;
+    if (replaying && trace.replay.decisions[u]) {
+      commitLinks(u, trace.replay.decisions[u]);
+      continue;
+    }
     const kids = childrenOf[u]
       .map((c, idx) => ({ c, idx }))
       .sort((a, b) => (subtreeSize[b.c] - subtreeSize[a.c]) || (a.idx - b.idx))
@@ -958,25 +1045,36 @@ function metroLayoutComponent(rootName, mainRoot, alpha, baseSegmentLength, beam
     kids.forEach(v => {
       const opts = optsByKid[v];
 
+      // Everything about a candidate link that does not depend on the beam state is computed once
+      const optCache = new Array(opts.length);
+      const prepared = (i) => {
+        if (optCache[i]) return optCache[i];
+        const opt = opts[i];
+        const geom = metroEdgeGeometry(uPos, opt.firstDir, opt.s, opt.len);
+        const base = committedPart(u, v, geom, opt.len, nearNodes, nearSegs);
+        // c2-like term: prefer positions far from the rest of the drawing on average
+        let sum = 0;
+        for (const n of placedNames) sum += Math.hypot(coords[n].x - geom.pos.x, coords[n].y - geom.pos.y);
+        const avgDist = placedNames.length > 0 ? sum / placedNames.length : 0;
+        optCache[i] = { geom, base, avgDist, routeCache: {} };
+        return optCache[i];
+      };
+
       const expand = (enforceDistinct) => {
         const out = [];
         beam.forEach(state => {
           const used = new Set(blocked);
           state.items.forEach(it => used.add(it.firstDir));
           let tentPos = null;
-          opts.forEach(opt => {
+          opts.forEach((opt, i) => {
             if (enforceDistinct && used.has(opt.firstDir)) return;
-            const geom = metroEdgeGeometry(uPos, opt.firstDir, opt.s, opt.len);
-            let score = scorePlacement(u, v, geom, opt.len, state.items, nearNodes, nearSegs);
-            score += opt.pref * 12;
-            // c2-like term: prefer positions far from the rest of the drawing on average
-            let sum = 0, cnt = 0;
-            placedNames.forEach(n => { sum += Math.hypot(coords[n].x - geom.pos.x, coords[n].y - geom.pos.y); cnt++; });
-            score -= (cnt > 0 ? sum / cnt : 0) * 0.02;
+            const pc = prepared(i);
+            const geom = pc.geom;
+            let score = scorePlacement(u, v, geom, opt.len, state.items, pc.base);
+            score += opt.pref * W.pref;
+            score -= pc.avgDist * W.avg;
 
-            const segs = geom.bend
-              ? [{ p1: uPos, p2: geom.bend }, { p1: geom.bend, p2: geom.pos }]
-              : [{ p1: uPos, p2: geom.pos }];
+            const segs = pc.base.newSegs;
 
             // Cycle edges from v to vertices that are already placed (or placed earlier in this beam state)
             const routes = [];
@@ -997,7 +1095,10 @@ function metroLayoutComponent(rootName, mainRoot, alpha, baseSegmentLength, beam
                   }
                   return;                                // routed later, when w is placed
                 }
-                const r = routeCycleEdge(v, geom.pos, w, wPos, state, ownSegs);
+                // Committed part of the route cost can be shared by all beam states when w is committed
+                let cache = null;
+                if (placedSet.has(w)) cache = pc.routeCache[w] || (pc.routeCache[w] = []);
+                const r = routeCycleEdge(v, geom.pos, w, wPos, state, ownSegs, cache);
                 score += r.cost;
                 routes.push(r);
                 ownSegs = ownSegs.concat(r.segs);
@@ -1022,8 +1123,13 @@ function metroLayoutComponent(rootName, mainRoot, alpha, baseSegmentLength, beam
       beam = next.slice(0, beamWidth);
     });
 
-    const best = beam[0];
-    best.items.forEach(it => {
+    commitLinks(u, beam[0].items);
+  }
+
+  function commitLinks(u, items) {
+    const uPos = coords[u];
+    if (trace && trace.record) trace.record[u] = items;
+    items.forEach(it => {
       const v = it.v;
       coords[v] = it.pos;
       orientations[v] = it.finalK;
@@ -1035,10 +1141,10 @@ function metroLayoutComponent(rootName, mainRoot, alpha, baseSegmentLength, beam
       const canonicalKey = [u, v].sort().join("-");
       if (it.bend) {
         localBends[`${u}-${v}`] = it.bend;
-        linesDrawn.push({ p1: uPos, p2: it.bend, edgeKey: canonicalKey, u, v });
-        linesDrawn.push({ p1: it.bend, p2: it.pos, edgeKey: canonicalKey, u, v });
+        addLine({ p1: uPos, p2: it.bend, edgeKey: canonicalKey, u, v });
+        addLine({ p1: it.bend, p2: it.pos, edgeKey: canonicalKey, u, v });
       } else {
-        linesDrawn.push({ p1: uPos, p2: it.pos, edgeKey: canonicalKey, u, v });
+        addLine({ p1: uPos, p2: it.pos, edgeKey: canonicalKey, u, v });
       }
 
       usedPorts[u].add(it.firstDir);
@@ -1048,7 +1154,7 @@ function metroLayoutComponent(rootName, mainRoot, alpha, baseSegmentLength, beam
       it.routes.forEach(r => {
         const key = [r.w, v].sort().join("-");
         if (r.bend) localBends[`${r.w}-${v}`] = r.bend;
-        r.segs.forEach(sg => linesDrawn.push({ p1: sg.p1, p2: sg.p2, edgeKey: key, u: r.w, v, cycle: true }));
+        r.segs.forEach(sg => addLine({ p1: sg.p1, p2: sg.p2, edgeKey: key, u: r.w, v, cycle: true }));
         if (r.portW !== null) usedPorts[r.w].add(r.portW);
         if (r.portV !== null) usedPorts[v].add(r.portV);
       });
@@ -1082,6 +1188,20 @@ const METRO_LARGE_TREE_STAGES = [
   { alphaFactor: 0.6, candidates: [ { f: 2, B: 1 }, { f: 2.5, B: 1 }, { f: 2.5, B: 2 } ] },
   { alphaFactor: 0.5, candidates: [ { f: 2, B: 1 }, { f: 2.5, B: 2 }, { f: 3, B: 1 }, { f: 3, B: 2 } ] }
 ];
+// Trees with at most 100 vertices keep their edge lengths (start edge 90 px, the given alpha, no extra shrink):
+// only the placement search (beam width) and the weighting of the soft terms are varied.
+const METRO_SMALL_TREE_MAX_VERTICES = 100;
+const METRO_SMALL_TREE_STAGES = [
+  { alphaFactor: 1.0, candidates: [ { f: 1, B: 4 }, { f: 1, B: 1 }, { f: 1, B: 2 }, { f: 1, B: 3 },
+                                    { f: 1, B: 6 }, { f: 1, B: 8 }, { f: 1, B: 12 } ] }
+];
+// Other weightings of the soft placement terms (none of them changes an edge length)
+const METRO_WEIGHT_VARIANTS = [
+  null,                                                   // METRO_DEFAULT_WEIGHTS
+  { clear: 80,  room: 2, pref: 6,  avg: 0.02 },
+  { clear: 40,  room: 3, pref: 12, avg: 0.05 },
+  { clear: 120, room: 4, pref: 4,  avg: 0 }
+];
 window.metroLargeTreeConfigCache = {};
 
 function metroGraphSignature() {
@@ -1091,13 +1211,17 @@ function metroGraphSignature() {
   return Object.keys(graph).map(u => g(u) + ":" + (graph[u] || []).map(e => e.to).join(",")).join(";");
 }
 
-// The search is used for trees with more than 100 vertices (as in the tree version) and, when
-// METRO_SEARCH_FOR_CYCLIC_GRAPHS is true, for every graph that has a cycle. Trees with at most 100 vertices
-// keep the original single run, so trees are drawn exactly as on the tree page.
+// The search (and the automatic repair after it) is used for every graph with at least 2 vertices.
+// Graphs with a cycle and trees with more than 100 vertices may also get other edge lengths (the stages of
+// METRO_LARGE_TREE_STAGES); trees with at most 100 vertices keep their edge lengths (METRO_SMALL_TREE_STAGES).
 function metroLayoutSearchApplies() {
+  return Object.keys(graph).length >= 2;
+}
+
+function metroSearchUsesSmallStages() {
   const n = Object.keys(graph).length;
-  if (n >= METRO_LARGE_TREE_MIN_VERTICES) return true;
-  return METRO_SEARCH_FOR_CYCLIC_GRAPHS && metroGraphHasCycle();
+  if (n >= METRO_LARGE_TREE_MIN_VERTICES) return false;
+  return !(METRO_SEARCH_FOR_CYCLIC_GRAPHS && metroGraphHasCycle());
 }
 
 function getMetroLargeTreeConfig(rootName, alpha) {
@@ -1115,21 +1239,46 @@ function getMetroLargeTreeConfig(rootName, alpha) {
   const baseLen = metroBaseSegmentLength();
   let best = null;
   let tried = 0;
+  const clean = () => best && best.overlapCount === 0 && best.lineIntersections === 0;
   try {
-    for (const stage of METRO_LARGE_TREE_STAGES) {
-      for (const c of stage.candidates) {
-        const cfg = { base: baseLen * c.f, beamWidth: c.B, alphaFactor: stage.alphaFactor };
-        const q = metroLayoutQuality(generateFamilyMetroCoordinates(rootName, alpha, cfg.base, cfg), METRO_SEARCH_VERTEX_THRESHOLD_PX);
-        tried++;
-        if (!best ||
-            q.overlapCount < best.overlapCount ||
-            (q.overlapCount === best.overlapCount && q.lineIntersections < best.lineIntersections)) {
-          best = { base: cfg.base, beamWidth: cfg.beamWidth, alphaFactor: cfg.alphaFactor,
-                   overlapCount: q.overlapCount, lineIntersections: q.lineIntersections };
+    const small = metroSearchUsesSmallStages();
+    const stages = small ? METRO_SMALL_TREE_STAGES : METRO_LARGE_TREE_STAGES;
+    const n = Object.keys(graph).length;
+    // Every weighting with every candidate for graphs up to 100 vertices; for larger graphs (each layout is
+    // expensive) the other weightings only with the default settings.
+    for (const weights of METRO_WEIGHT_VARIANTS) {
+      for (const stage of stages) {
+        for (const c of stage.candidates) {
+          if (n > METRO_SMALL_TREE_MAX_VERTICES && weights && !(c.f === 1 && c.B === 4 && stage.alphaFactor === 1)) continue;
+          const cfg = { base: baseLen * c.f, beamWidth: c.B, alphaFactor: stage.alphaFactor, weights };
+          const q = metroLayoutQuality(generateFamilyMetroCoordinates(rootName, alpha, cfg.base, cfg), METRO_SEARCH_VERTEX_THRESHOLD_PX);
+          tried++;
+          if (!best ||
+              q.overlapCount < best.overlapCount ||
+              (q.overlapCount === best.overlapCount && q.lineIntersections < best.lineIntersections)) {
+            best = { base: cfg.base, beamWidth: cfg.beamWidth, alphaFactor: cfg.alphaFactor, weights,
+                     overlapCount: q.overlapCount, lineIntersections: q.lineIntersections };
+          }
+          if (clean()) break;
         }
-        if (best.overlapCount === 0 && best.lineIntersections === 0) break;
+        if (clean()) break;
       }
-      if (best.overlapCount === 0 && best.lineIntersections === 0) break;
+      if (clean()) break;
+    }
+    // Overlaps left: automatic repair (re-routes single links, never changes a length)
+    best.searchOverlapCount = best.overlapCount;
+    best.searchLineIntersections = best.lineIntersections;
+    best.autoOverrides = null;
+    best.autoMoves = 0;
+    if (!clean()) {
+      const rep = metroAutoRepair(rootName, alpha, best);
+      if (rep.moves > 0) {
+        best.autoOverrides = rep.overrides;
+        best.autoMoves = rep.moves;
+        best.overlapCount = rep.overlapCount;
+        best.lineIntersections = rep.lineIntersections;
+      }
+      tried += rep.evaluations;
     }
   } finally {
     if (hadOverrides) window.metroOverridesByRoot[rootName] = savedOverrides;
@@ -1142,14 +1291,114 @@ function getMetroLargeTreeConfig(rootName, alpha) {
   return best;
 }
 
+// --- 3c. Automatic repair (part of the layout, so Run Full Metro Layout, Step by Step and the Fix buttons all
+// start from it) ---
+// Local search over the choices of single tree links, like the Fix buttons, but only with moves that keep
+// every edge length: the branch offset g and the bend sign s of one link parent -> target are forced, and the
+// layout re-places (and re-routes the cycle edges of) everything after it. Targets are the vertices of
+// overlapping pairs and colliding edges (both ends of a cycle edge) and their parents and grandparents.
+// A move is kept when it lowers (overlapping vertex pairs, colliding edge pairs, -minimum distance)
+// lexicographically. The number of layouts tried is fixed by the graph size, so the result is deterministic.
+const METRO_REPAIR_EVAL_BUDGET = 18000;    // divided by the number of vertices plus edges
+const METRO_REPAIR_MIN_EVALS = 30;
+const METRO_REPAIR_MAX_EVALS = 600;
+
+function metroRepairBetter(a, b) {
+  if (a.overlapCount !== b.overlapCount) return a.overlapCount < b.overlapCount;
+  if (a.lineIntersections !== b.lineIntersections) return a.lineIntersections < b.lineIntersections;
+  return a.minDistance > b.minDistance + 1e-9;
+}
+
+function metroAutoRepair(rootName, alpha, cfg) {
+  const n = Object.keys(graph).length || 1;
+  let m = 0;
+  for (const u in graph) m += (graph[u] || []).length;
+  m /= 2;
+  const maxEvals = Math.max(METRO_REPAIR_MIN_EVALS, Math.min(METRO_REPAIR_MAX_EVALS, Math.round(METRO_REPAIR_EVAL_BUDGET / (n + m))));
+  const parentMap = buildMetroParentMap(rootName);
+  let evaluations = 0;
+  // Only the link parent -> target changes in a trial, so every vertex placed before `parent` keeps its links:
+  // they are replayed from the current best layout instead of being searched again (same result, less work).
+  let bestRecord = null;
+  const evaluate = (ovr, until) => {
+    evaluations++;
+    window.metroOverridesByRoot[rootName] = ovr;
+    const trace = { record: {} };
+    if (until && bestRecord) trace.replay = { decisions: bestRecord, until };
+    const layout = generateFamilyMetroCoordinates(rootName, alpha, cfg.base, cfg, trace);
+    const q = metroLayoutQuality(layout, METRO_SEARCH_VERTEX_THRESHOLD_PX);
+    q.record = trace.record;
+    q.orientations = layout.orientations;
+    return q;
+  };
+
+  let bestOv = createEmptyOverrides();
+  let bestQ = evaluate(bestOv);
+  bestRecord = bestQ.record;
+  let moves = 0;
+
+  while ((bestQ.overlapCount > 0 || bestQ.lineIntersections > 0) && evaluations < maxEvals) {
+    // Targets: endpoints first, then their parents, then grandparents
+    const levels = [[], [], []];
+    const seen = new Set();
+    const addChain = (x) => {
+      for (let depth = 0; depth < 3 && x && parentMap[x]; depth++) {
+        if (!seen.has(x)) { seen.add(x); levels[depth].push(x); }
+        x = parentMap[x];
+      }
+    };
+    bestQ.overlappingPairs.forEach(pr => { addChain(pr.u); addChain(pr.v); });
+    bestQ.collidingEdgePairs.forEach(pr => [pr.s1, pr.s2].forEach(sg => {
+      if (sg.cycle) { addChain(sg.u); addChain(sg.v); }
+      else addChain(parentMap[sg.v] === sg.u ? sg.v : sg.u);
+    }));
+    const targets = levels[0].concat(levels[1], levels[2]);
+
+    let improved = false;
+    for (const target of targets) {
+      if (evaluations >= maxEvals) break;
+      const parent = parentMap[target];
+      if (!parent) continue;
+      const edgeKey = `${parent}-${target}`;
+      let candOv = null, candQ = null;
+      for (const tr of buildMetroFixTrials(rootName, parent, target, bestQ.orientations)) {
+        if (evaluations >= maxEvals) break;
+        const ov = applyMetroFixTrial(bestOv, edgeKey, tr.g, tr.t);
+        const q = evaluate(ov, parent);
+        if (metroRepairBetter(q, candQ || bestQ)) { candOv = ov; candQ = q; }
+      }
+      if (candOv) {
+        bestOv = candOv; bestQ = candQ; bestRecord = candQ.record; moves++; improved = true;
+        if (bestQ.overlapCount === 0 && bestQ.lineIntersections === 0) break;
+      }
+    }
+    if (!improved) break;
+  }
+  return { overrides: bestOv, moves, evaluations,
+           overlapCount: bestQ.overlapCount, lineIntersections: bestQ.lineIntersections };
+}
+
+// Overrides a fresh layout starts from: the automatic repair of the cached search result (or none)
+function metroInitialOverrides(rootName, alpha) {
+  const cfg = getMetroLargeTreeConfig(rootName, alpha);
+  if (cfg && cfg.autoOverrides) return JSON.parse(JSON.stringify(cfg.autoOverrides));
+  return createEmptyOverrides();
+}
+
 function describeMetroLargeTreeConfig(cfg, alpha) {
   if (!cfg) return "";
+  if (cfg.tried === 1) return "";   // the default layout was already free of overlaps
   const parts = [`start edge ${Math.round(cfg.base)} px`, cfg.beamWidth === 1 ? "greedy placement" : `beam width ${cfg.beamWidth}`];
   if (cfg.alphaFactor < 1) {
     parts.push(`extra shrink ×${cfg.alphaFactor} per generation (effective α = ${+(alpha * cfg.alphaFactor).toFixed(3)})`);
   }
-  const what = metroGraphHasCycle() ? "Graph" : "Large tree";
-  return ` ${what}: best of ${cfg.tried} candidate layout${cfg.tried === 1 ? "" : "s"} (${parts.join(", ")}).`;
+  let text = ` Layout search: best of ${cfg.tried} candidate layout${cfg.tried === 1 ? "" : "s"} (${parts.join(", ")}).`;
+  if (cfg.autoMoves > 0) {
+    text += ` Automatic repair re-routed ${cfg.autoMoves} link${cfg.autoMoves === 1 ? "" : "s"}` +
+      ` (overlapping vertex pairs ${cfg.searchOverlapCount} → ${cfg.overlapCount},` +
+      ` colliding edge pairs ${cfg.searchLineIntersections} → ${cfg.lineIntersections}).`;
+  }
+  return text;
 }
 
 // Helper to pre-calculate global offsets
@@ -1206,7 +1455,8 @@ function runFamilyMetroMapLayout(alpha = 0.75, resetOverrides = true) {
   }
 
   if (resetOverrides) {
-    window.metroOverridesByRoot[rootNode] = createEmptyOverrides();
+    // A fresh layout starts from the automatic repair (section 3c); the Fix buttons build on top of it
+    window.metroOverridesByRoot[rootNode] = metroInitialOverrides(rootNode, alpha);
     window.metroChangeSummaryByRoot[rootNode] = [];
   }
 
@@ -1499,7 +1749,7 @@ function stepBFSMove(alpha = 0.75) {
   if (!window.stepBfsState.active || stepGraphChanged || window.stepBfsState.root !== rootNode || window.stepBfsState.alpha !== alpha) {
     // A fresh step-by-step run starts from exactly the same state as "Run Full Metro Layout"
     // (overrides from earlier fixes are cleared), so both buttons produce the identical drawing.
-    window.metroOverridesByRoot[rootNode] = createEmptyOverrides();
+    window.metroOverridesByRoot[rootNode] = metroInitialOverrides(rootNode, alpha);
     window.metroChangeSummaryByRoot[rootNode] = [];
 
     const fullLayers = computeBFSLayers(rootNode);

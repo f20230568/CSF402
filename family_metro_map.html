@@ -85,8 +85,8 @@
   <div class="controls-section">
     <h2>Family Metro Map Visualizer</h2>
     <a href="index.html" style="color: blue;">← Back to BFS/DFS Visualizer</a> |
-    <a href="manager.html" style="color: blue;">Go to Graph Drawer (Spring-Embedder)</a>|
-    <a href="family_metro_map_graph.html" style="color: blue;">Go to Family Metro Map (graphs)</a>
+    <a href="manager.html" style="color: blue;">Go to Graph Drawer (Spring-Embedder)</a> |
+    <a href="family_metro_map_graph.html" style="color: blue;">Go to the original Family Metro Map (Graphs)</a>
     <br><br>
 
     <select id="mode" onchange="switchMode()">
@@ -101,16 +101,14 @@
     </div>
 
     <div id="listMode" style="display:none">
-      <textarea id="listInput" placeholder="A_:B,C_&#10;B:A_,D&#10;C_:A_&#10;D:B"></textarea><br>
-      <small>Male vertices end with an underscore (A_), female vertices have none (B).</small><br>
+      <textarea id="listInput" placeholder="A:B,C&#10;B:A,D&#10;C:A&#10;D:B"></textarea><br>
       <button id="showListGraphBtn">Show Graph</button>
       <input type="file" id="importListFile" accept=".txt">
       <button id="importListBtn">Import List</button>
     </div>
 
     <div id="matrixMode" style="display:none">
-      <textarea id="matrixInput" placeholder="_0,1,1&#10;1,0,0&#10;_1,0,0"></textarea><br>
-      <small>A row starting with an underscore is a male vertex (_0,1,1); other rows are female.</small><br>
+      <textarea id="matrixInput" placeholder="0,1,1&#10;1,0,0&#10;1,0,0"></textarea><br>
       <button id="showMatrixGraphBtn">Show Graph</button>
       <input type="file" id="importMatrixFile" accept=".txt">
       <button id="importMatrixBtn">Import Matrix</button>
@@ -141,9 +139,6 @@
         </button>
         <button id="fixEdgeOverlapsBtn" onclick="fixMetroEdgeOverlaps(parseFloat(document.getElementById('metroAlpha').value))" style="background:#e67e22; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
           Fix Edge Overlaps
-        </button>
-        <button id="randomGenderBtn" onclick="randomizeGendersAndRedraw(parseFloat(document.getElementById('metroAlpha').value))" style="background:#4a4a4a; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
-          Randomize Genders
         </button>
         <button id="saveDrawingBtn" onclick="saveDrawingAsJPG()" style="background:#8e44ad; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
           Save Drawing

@@ -239,7 +239,7 @@ function selectNode(name) {
   }
 }
 
-function placeNodesGrid(names, genders = null) {
+function placeNodesGrid(names) {
   const canvasDiv = getEl("canvas");
   if (!canvasDiv) return;
 
@@ -270,7 +270,6 @@ function placeNodesGrid(names, genders = null) {
     canvasDiv.appendChild(div);
     nodes[name] = div;
     if (!graph[name]) graph[name] = [];
-    if (genders && genders[name]) setNodeGender(name, genders[name]);
   });
 
   nodeIndex = names.length;
@@ -358,35 +357,16 @@ function removeEdge() {
 }
 
 function makeDraggable(el) {
+  let offsetX, offsetY;
   el.onmousedown = e => {
-    if (e.button !== 0) return;             // left button only
-    e.preventDefault();                     // no text selection or native drag while moving the vertex
-    const canvasDiv = getEl("canvas");
-    if (!canvasDiv) return;
-
-    // Delta-based drag: the vertex moves by exactly as much as the mouse moves from where it was pressed.
-    // Nothing depends on where the page or canvas sits, so page scrolling, canvas scrolling, borders,
-    // margins and CSS transforms on the vertex cannot make it jump.
-    const startMouseX = e.clientX;
-    const startMouseY = e.clientY;
-    const startLeft = parseFloat(el.style.left);
-    const startTop  = parseFloat(el.style.top);
-    const baseLeft = isNaN(startLeft) ? el.offsetLeft : startLeft;
-    const baseTop  = isNaN(startTop)  ? el.offsetTop  : startTop;
-    const startScrollLeft = canvasDiv.scrollLeft;
-    const startScrollTop  = canvasDiv.scrollTop;
-
-    // Screen pixels per CSS pixel of the canvas (1 normally; differs when the page uses CSS zoom/scale)
-    const canvasRect = canvasDiv.getBoundingClientRect();
-    const scaleX = (canvasDiv.offsetWidth  > 0 && canvasRect.width  > 0) ? canvasRect.width  / canvasDiv.offsetWidth  : 1;
-    const scaleY = (canvasDiv.offsetHeight > 0 && canvasRect.height > 0) ? canvasRect.height / canvasDiv.offsetHeight : 1;
-
+    offsetX = e.offsetX;
+    offsetY = e.offsetY;
     document.onmousemove = m => {
-      m.preventDefault();
-      const dx = (m.clientX - startMouseX) / scaleX + (canvasDiv.scrollLeft - startScrollLeft);
-      const dy = (m.clientY - startMouseY) / scaleY + (canvasDiv.scrollTop  - startScrollTop);
-      el.style.left = Math.round(baseLeft + dx) + "px";
-      el.style.top  = Math.round(baseTop  + dy) + "px";
+      const canvasDiv = getEl("canvas");
+      if (!canvasDiv) return;
+      const rect = canvasDiv.getBoundingClientRect();
+      el.style.left = (m.pageX - rect.left - offsetX) + "px";
+      el.style.top  = (m.pageY - rect.top  - offsetY) + "px";
       drawEdges();
       if (typeof updateCoords === "function") updateCoords();
       if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
@@ -394,7 +374,6 @@ function makeDraggable(el) {
     };
     document.onmouseup = () => {
       document.onmousemove = null;
-      document.onmouseup = null;
       if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
       //if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
     };
@@ -621,19 +600,15 @@ function downloadFile(filename, text) {
 }
 
 function exportList() {
-  // Male vertices are written with a trailing underscore (A_), female vertices without
-  const mark = v => v + (appNodeGender(v) === "M" ? "_" : "");
   let out = "";
-  for (let u in graph) out += `${mark(u)}:${graph[u].map(e => mark(e.to)).join(",")}\n`;
+  for (let u in graph) out += `${u}:${graph[u].map(e => e.to).join(",")}\n`;
   downloadFile("graph_list.txt", out);
 }
 
 function exportMatrix() {
-  // Natural label order (A..Z, A1..) so that re-importing the matrix gives every vertex its original name.
-  // A male vertex's row starts with an underscore.
+  // Natural label order (A..Z, A1..) so that re-importing the matrix gives every vertex its original name
   let keys = Object.keys(graph).sort(compareVertexLabels);
-  let out = keys.map(u => (appNodeGender(u) === "M" ? "_" : "") +
-                          keys.map(v => graph[u].some(e => e.to === v) ? 1 : 0).join(",")).join("\n");
+  let out = keys.map(u => keys.map(v => graph[u].some(e => e.to === v) ? 1 : 0).join(",")).join("\n");
   downloadFile("graph_matrix.txt", out);
 }
 
@@ -771,23 +746,47 @@ function buildFromList() {
   const listInput = getEl("listInput");
   if (!listInput) return;
 
-  // Check everything first: a bad list leaves the current drawing untouched
-  const parsed = parseAdjacencyListText(listInput.value);
-  if (parsed.errors.length) {
-    alert(formatProblems(`The adjacency list was not loaded (${parsed.errors.length} problem${parsed.errors.length === 1 ? "" : "s"}):`, parsed.errors));
-    setStatusText(`Adjacency list not loaded: ${parsed.errors[0]}`);
-    return;
-  }
-
   clearGraph(false);
 
-  const names = parsed.names;
-  placeNodesGrid(names, parsed.genders);
+  let lines = listInput.value.trim().split("\n");
+  let namesSet = new Set();
 
-  names.forEach(n => { if (!graph[n]) graph[n] = []; });
-  parsed.edges.forEach(([u, v]) => {
-    graph[u].push({ to: v });
-    graph[v].push({ to: u });
+  lines.forEach(line => {
+    let [node, neighbors] = line.split(":");
+    if (!node || !node.trim()) return;
+    namesSet.add(node.trim().toUpperCase());
+  });
+  // Vertices that only appear as neighbours (e.g. "A:B,C" without lines for B and C) are vertices too;
+  // without this they were counted in the graph but never drawn.
+  lines.forEach(line => {
+    let [node, neighbors] = line.split(":");
+    if (!node || !node.trim() || !neighbors) return;
+    neighbors.split(",").forEach(n => {
+      n = n.trim().toUpperCase();
+      if (n) namesSet.add(n);
+    });
+  });
+
+  let names = Array.from(namesSet);
+  placeNodesGrid(names);
+
+  lines.forEach(line => {
+    let [node, neighbors] = line.split(":");
+    if (!node || !node.trim()) return;
+    node = node.trim().toUpperCase();
+
+    if (!graph[node]) graph[node] = [];
+    if (!neighbors) return;
+
+    neighbors.split(",").forEach(n => {
+      n = n.trim().toUpperCase();
+      if (!n || n === node) return;          // ignore empty names and self-loops
+      if (!graph[n]) graph[n] = [];
+      if (!graph[node].some(e => e.to === n)) {
+        graph[node].push({ to: n });
+        graph[n].push({ to: node });
+      }
+    });
   });
 
   if (names.length <= MAX_RENDER_NODES) {
@@ -795,8 +794,6 @@ function buildFromList() {
   }
 
   updateLists();
-  setStatusText(`Adjacency list loaded: ${names.length} vertices (${summariseGenders(names, parsed.genders)}), ` +
-                `${parsed.edges.length} edge${parsed.edges.length === 1 ? "" : "s"}.` + (parsed.warnings.length ? " Note: " + parsed.warnings.join(" ") : ""));
   if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
   if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 }
@@ -805,43 +802,33 @@ function buildFromMatrix() {
   const matrixInput = getEl("matrixInput");
   if (!matrixInput) return;
 
-  // Check everything first: a bad matrix leaves the current drawing untouched
-  const parsed = parseAdjacencyMatrixText(matrixInput.value);
-  if (parsed.errors.length) {
-    alert(formatProblems(`The adjacency matrix was not loaded (${parsed.errors.length} problem${parsed.errors.length === 1 ? "" : "s"}):`, parsed.errors));
-    setStatusText(`Adjacency matrix not loaded: ${parsed.errors[0]}`);
-    return;
-  }
-
   clearGraph(false);
 
-  let size = parsed.size;
+  let rows = matrixInput.value.trim().split("\n").filter(r => r.trim().length > 0);
+  let size = rows.length;
 
   if (size > MAX_MATRIX_SIZE) {
     alert("Matrix too large! Processing in lightweight mode.");
   }
 
   let labels = [];
-  const genders = {};
   for (let i = 0; i < size; i++) {
     labels.push(getVertexLabel(i));
-    genders[labels[i]] = parsed.male[i] ? "M" : "F";
   }
 
-  placeNodesGrid(labels, genders);
+  placeNodesGrid(labels);
 
-  let edgeCount = 0;
   for (let i = 0; i < size; i++) {
+    let cols = rows[i].split(",");
     let u = labels[i];
     if (!graph[u]) graph[u] = [];
 
-    for (let j = i + 1; j < size; j++) {
-      if (parsed.rows[i][j]) {
+    for (let j = i + 1; j < cols.length; j++) {
+      if (cols[j].trim() === "1") {
         let v = labels[j];
         if (!graph[v]) graph[v] = [];
         graph[u].push({ to: v });
         graph[v].push({ to: u });
-        edgeCount++;
       }
     }
   }
@@ -851,8 +838,6 @@ function buildFromMatrix() {
   }
 
   updateLists();
-  setStatusText(`Adjacency matrix loaded: ${size} vertices (${summariseGenders(labels, genders)}), ${edgeCount} edge${edgeCount === 1 ? "" : "s"}.` +
-                (parsed.warnings.length ? " Note: " + parsed.warnings.join(" ") : ""));
   if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
   if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 }
@@ -862,298 +847,11 @@ function loadFileIntoBox(fileInput, targetBox) {
   const file = fileInput.files && fileInput.files[0];
   if (!file) return;
 
-  const isMatrix = targetBox.id === "matrixInput";
-  const kind = isMatrix ? "adjacency matrix" : "adjacency list";
-
-  // File checks: plain text, not too large, not empty
-  if (!/\.txt$/i.test(file.name)) {
-    alert(`"${file.name}" is not a .txt file. Please choose a plain-text ${kind} file.`);
-    setStatusText(`File "${file.name}" was not loaded: it is not a .txt file.`);
-    fileInput.value = "";
-    return;
-  }
-  if (file.size === 0) {
-    alert(`"${file.name}" is empty.`);
-    setStatusText(`File "${file.name}" was not loaded: it is empty.`);
-    fileInput.value = "";
-    return;
-  }
-  if (file.size > MAX_INPUT_FILE_BYTES) {
-    alert(`"${file.name}" is ${(file.size / 1048576).toFixed(1)} MB; files up to ${MAX_INPUT_FILE_BYTES / 1048576} MB are accepted.`);
-    setStatusText(`File "${file.name}" was not loaded: it is too large.`);
-    fileInput.value = "";
-    return;
-  }
-
   const reader = new FileReader();
-  reader.onerror = function() {
-    alert(`"${file.name}" could not be read.`);
-    setStatusText(`File "${file.name}" could not be read.`);
-    fileInput.value = "";
-  };
   reader.onload = function(e) {
-    const text = normaliseInputText(e.target.result);
-    // Binary files (images, Word documents, ...) contain control characters that plain text never has
-    if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(text) || text.includes("\uFFFD")) {
-      alert(`"${file.name}" does not look like a plain-text file.`);
-      setStatusText(`File "${file.name}" was not loaded: it is not a plain-text file.`);
-      fileInput.value = "";
-      return;
-    }
-    targetBox.value = text;
-
-    // Check the contents now, so problems show up before "Show Graph" is pressed
-    const parsed = isMatrix ? parseAdjacencyMatrixText(text) : parseAdjacencyListText(text);
-    if (parsed.errors.length) {
-      alert(formatProblems(`"${file.name}" was loaded into the box but is not a valid ${kind} ` +
-                           `(${parsed.errors.length} problem${parsed.errors.length === 1 ? "" : "s"}):`, parsed.errors));
-      setStatusText(`File "${file.name}" has problems: ${parsed.errors[0]}`);
-    } else {
-      const count = isMatrix ? parsed.size : parsed.names.length;
-      const males = isMatrix ? parsed.male.filter(Boolean).length
-                             : parsed.names.filter(n => parsed.genders[n] === "M").length;
-      setStatusText(`File "${file.name}" is a valid ${kind}: ${count} vertices (${males} male, ${count - males} female). ` +
-                    `Press "Show Graph" to draw it.` + (parsed.warnings.length ? " Note: " + parsed.warnings.join(" ") : ""));
-    }
+    targetBox.value = e.target.result;
   };
   reader.readAsText(file);
-}
-
-// ---------------------------------------------------------------------------------------------
-// Gender in the adjacency list and matrix
-//   List:   a male vertex is written with a trailing underscore (A_), a female vertex without (A).
-//           Example:  A_:B,C_   B:A_,D   C_:A_   D:B   (A and C male, B and D female)
-//   Matrix: a row that starts with an underscore is a male vertex, every other row is female.
-//           Example:  _0,1,1   1,0,0   _1,0,0         (A and C male, B female)
-// The Visual Builder keeps the alternating genders (A male, B female, C male, ...).
-// ---------------------------------------------------------------------------------------------
-
-const MAX_INPUT_FILE_BYTES = 2 * 1024 * 1024;   // larger files are refused
-const MAX_LISTED_PROBLEMS = 12;                 // problems shown in one message
-const MAX_VERTEX_NAME_LENGTH = 12;
-
-// Gender of a vertex as drawn: the metro code's rule when it is loaded, otherwise the stored gender,
-// otherwise the Visual Builder's alternating rule.
-function appNodeGender(name) {
-  if (typeof getNodeGender === "function") return getNodeGender(name);
-  if (nodes[name] && nodes[name].dataset && nodes[name].dataset.gender) return nodes[name].dataset.gender.toUpperCase();
-  return String(name).charCodeAt(0) % 2 === 0 ? "F" : "M";
-}
-
-function setNodeGender(name, gender) {
-  const el = nodes[name];
-  if (!el) return;
-  el.dataset.gender = gender;
-  el.classList.remove("node-male", "node-female");
-  el.classList.add(gender === "M" ? "node-male" : "node-female");
-}
-
-// Text from a box or file: no byte-order mark, Unix line ends
-function normaliseInputText(text) {
-  return String(text == null ? "" : text).replace(/^﻿/, "").replace(/\r\n?/g, "\n");
-}
-
-function formatProblems(title, problems) {
-  const shown = problems.slice(0, MAX_LISTED_PROBLEMS).map(p => " - " + p);
-  if (problems.length > MAX_LISTED_PROBLEMS) shown.push(` - ... and ${problems.length - MAX_LISTED_PROBLEMS} more`);
-  return title + "\n" + shown.join("\n");
-}
-
-function setStatusText(text) {
-  const statusP = getEl("status");
-  if (statusP) statusP.textContent = text;
-}
-
-// One vertex token of the list, e.g. "A", "a_", "B12_"
-function parseListToken(raw, lineNo) {
-  const tok = raw.trim().toUpperCase();
-  if (tok === "") return { error: `Line ${lineNo}: empty vertex name.` };
-  if (/^_/.test(tok)) {
-    return { error: `Line ${lineNo}: "${raw.trim()}" starts with an underscore. Male vertices are written with the underscore at the end (e.g. A_).` };
-  }
-  if (/__+$/.test(tok)) {
-    return { error: `Line ${lineNo}: "${raw.trim()}" has more than one underscore. Use one trailing underscore for a male vertex (e.g. A_).` };
-  }
-  const m = /^([A-Z0-9]+)(_?)$/.exec(tok);
-  if (!m) {
-    return { error: `Line ${lineNo}: "${raw.trim()}" is not a valid vertex name. Use letters and digits only, plus an optional trailing _ for male.` };
-  }
-  if (m[1].length > MAX_VERTEX_NAME_LENGTH) {
-    return { error: `Line ${lineNo}: "${raw.trim()}" is longer than ${MAX_VERTEX_NAME_LENGTH} characters.` };
-  }
-  return { name: m[1], gender: m[2] === "_" ? "M" : "F" };
-}
-
-// Checks an adjacency list and returns { errors, warnings, names, genders, edges }
-function parseAdjacencyListText(text) {
-  const errors = [], warnings = [];
-  const names = [];                 // vertices in order of first appearance (any position)
-  const genders = {};               // name -> "M" | "F"
-  const firstSeen = {};             // name -> { line, written }
-  const edges = [];                 // [u, v] pairs, each undirected edge once
-  const edgeKeys = new Set();
-  const selfLoops = new Set();
-
-  const lines = normaliseInputText(text).split("\n");
-  if (lines.every(l => l.trim() === "")) {
-    errors.push("The adjacency list is empty.");
-    return { errors, warnings, names, genders, edges };
-  }
-
-  const useToken = (raw, lineNo) => {
-    const t = parseListToken(raw, lineNo);
-    if (t.error) { errors.push(t.error); return null; }
-    if (!(t.name in genders)) {
-      genders[t.name] = t.gender;
-      firstSeen[t.name] = { line: lineNo, written: raw.trim() };
-      names.push(t.name);
-    } else if (genders[t.name] !== t.gender) {
-      const f = firstSeen[t.name];
-      errors.push(`Vertex ${t.name} is written as "${f.written}" (${genders[t.name] === "M" ? "male" : "female"}) on line ${f.line} ` +
-                  `but as "${raw.trim()}" (${t.gender === "M" ? "male" : "female"}) on line ${lineNo}. Write it the same way everywhere.`);
-    }
-    return t.name;
-  };
-
-  lines.forEach((line, i) => {
-    const lineNo = i + 1;
-    if (line.trim() === "") return;
-    const parts = line.split(":");
-    if (parts.length > 2) {
-      errors.push(`Line ${lineNo}: more than one ":" (expected the form A_:B,C).`);
-      return;
-    }
-    const head = useToken(parts[0], lineNo);
-    if (parts.length === 1 || parts[1].trim() === "") return;     // a vertex without neighbours
-
-    parts[1].split(",").forEach((raw, k, all) => {
-      if (raw.trim() === "") {
-        if (k !== all.length - 1) errors.push(`Line ${lineNo}: empty neighbour between two commas.`);
-        return;                                                  // a single trailing comma is allowed
-      }
-      const nb = useToken(raw, lineNo);
-      if (head === null || nb === null) return;
-      if (nb === head) { selfLoops.add(head); return; }
-      const key = head < nb ? head + "|" + nb : nb + "|" + head;
-      if (!edgeKeys.has(key)) { edgeKeys.add(key); edges.push([head, nb]); }
-    });
-  });
-
-  // Same vertex order as before: vertices that start a line (in line order), then neighbour-only vertices
-  const heads = [];
-  const headSet = new Set();
-  lines.forEach(line => {
-    if (line.trim() === "") return;
-    const t = parseListToken(line.split(":")[0], 0);
-    if (!t.error && !headSet.has(t.name)) { headSet.add(t.name); heads.push(t.name); }
-  });
-  const ordered = heads.concat(names.filter(n => !headSet.has(n)));
-  names.length = 0;
-  ordered.forEach(n => names.push(n));
-
-  if (selfLoops.size) warnings.push(`Self-loops ignored at ${Array.from(selfLoops).sort(compareVertexLabels).join(", ")}.`);
-  if (!errors.length && names.length && names.every(n => genders[n] === "F")) {
-    warnings.push("No vertex is marked male, so every vertex is female. Write a male vertex with a trailing underscore (A_).");
-  }
-  return { errors, warnings, names, genders, edges };
-}
-
-// Checks an adjacency matrix and returns { errors, warnings, size, male, rows }
-function parseAdjacencyMatrixText(text) {
-  const errors = [], warnings = [];
-  const rawRows = normaliseInputText(text).split("\n").map(r => r.trim()).filter(r => r.length > 0);
-  const size = rawRows.length;
-  const male = [], rows = [];
-
-  if (size === 0) {
-    errors.push("The adjacency matrix is empty.");
-    return { errors, warnings, size, male, rows };
-  }
-
-  rawRows.forEach((rowText, i) => {
-    const r = i + 1;
-    let body = rowText;
-    const isMale = body.startsWith("_");
-    if (isMale) body = body.slice(1).trim();
-    male.push(isMale);
-
-    if (body.includes("_")) {
-      errors.push(`Row ${r}: an underscore is only allowed at the very start of the row (it marks the vertex as male).`);
-      rows.push(null);
-      return;
-    }
-    if (!body.includes(",") && /\s/.test(body) && size > 1) {
-      errors.push(`Row ${r}: entries must be separated by commas (e.g. 0,1,1).`);
-      rows.push(null);
-      return;
-    }
-    const cells = body.split(",").map(c => c.trim());
-    const bad = [];
-    cells.forEach((c, j) => { if (c !== "0" && c !== "1") bad.push(`column ${j + 1} ("${c}")`); });
-    if (bad.length) {
-      errors.push(`Row ${r}: every entry must be 0 or 1, found ${bad.slice(0, 3).join(", ")}${bad.length > 3 ? ", ..." : ""}.`);
-      rows.push(null);
-      return;
-    }
-    if (cells.length !== size) {
-      errors.push(`Row ${r} has ${cells.length} entries, but the matrix has ${size} rows (it must be square).`);
-      rows.push(null);
-      return;
-    }
-    rows.push(cells.map(c => c === "1"));
-  });
-
-  if (!errors.length) {
-    for (let i = 0; i < size; i++) {
-      if (rows[i][i]) errors.push(`Row ${i + 1}, column ${i + 1}: the diagonal must be 0 (a vertex cannot be its own neighbour).`);
-    }
-    for (let i = 0; i < size; i++) {
-      for (let j = i + 1; j < size; j++) {
-        if (rows[i][j] !== rows[j][i]) {
-          errors.push(`Entries (${i + 1}, ${j + 1}) and (${j + 1}, ${i + 1}) differ: the matrix must be symmetric (undirected graph).`);
-        }
-      }
-    }
-  }
-  if (!errors.length && male.every(m => !m)) {
-    warnings.push("No row is marked male, so every vertex is female. Start a male vertex's row with an underscore (_0,1,1).");
-  }
-  return { errors, warnings, size, male, rows };
-}
-
-function summariseGenders(names, genders) {
-  const m = names.filter(n => genders[n] === "M").length;
-  return `${m} male, ${names.length - m} female`;
-}
-
-// Randomize Genders: every vertex gets a random gender and the whole drawing is made again
-function randomizeGenders(alpha) {
-  const names = Object.keys(nodes).filter(n => nodes[n]);
-  if (names.length === 0) {
-    alert("Please add vertices first.");
-    return;
-  }
-
-  const genders = {};
-  names.forEach(n => {
-    genders[n] = Math.random() < 0.5 ? "M" : "F";
-    setNodeGender(n, genders[n]);
-  });
-
-  // Earlier fixer adjustments were made for the old genders
-  window.metroOverridesByRoot = {};
-  window.metroChangeSummaryByRoot = {};
-  if (window.stepBfsState) window.stepBfsState.active = false;
-
-  const a = (typeof alpha === "number" && isFinite(alpha) && alpha > 0) ? alpha : 0.75;
-  if (typeof runFamilyMetroMapLayout === "function") {
-    runFamilyMetroMapLayout(a);
-  } else {
-    drawEdges();
-  }
-
-  const statusP = getEl("status");
-  if (statusP) statusP.textContent = `Genders randomized (${summariseGenders(names, genders)}). ` + statusP.textContent;
 }
 
 function updateCanvasSize(x, y) {

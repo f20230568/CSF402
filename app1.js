@@ -27,6 +27,17 @@ const STEP = 70;
 
 const getEl = id => document.getElementById(id);
 
+// Element that holds the vertices. On pages with a zoomable drawing (#zoomLayer inside #canvas) vertices go
+// into the zoom layer so they are scaled together with the edges; other pages use #canvas directly.
+function getDrawingLayer() {
+  return getEl("zoomLayer") || getEl("canvas");
+}
+
+// Keeps the zoomed scroll area in sync with the drawing (only on pages that provide it)
+function refreshZoomExtent() {
+  if (typeof window.updateZoomExtent === "function") window.updateZoomExtent();
+}
+
 // Vertex label for index i: A..Z, then A1..Z1, A2..Z2, ... (no ASCII overflow past 'Z')
 function getVertexLabel(i) {
   return String.fromCharCode(65 + (i % 26)) + (i >= 26 ? Math.floor(i / 26) : "");
@@ -175,9 +186,9 @@ function switchMode() {
 }
 
 function addNode(nameOpt) {
-  const canvasDiv = getEl("canvas");
+  const drawingLayer = getDrawingLayer();
   const startNodeInp = getEl("startNode");
-  if (!canvasDiv) return;
+  if (!drawingLayer) return;
 
   const name = nameOpt || nextFreeVertexLabel();
   let div = document.createElement("div");
@@ -192,7 +203,7 @@ function addNode(nameOpt) {
   makeDraggable(div);
   div.onclick = () => selectNode(name);
 
-  canvasDiv.appendChild(div);
+  drawingLayer.appendChild(div);
   nodes[name] = div;
   if (!graph[name]) graph[name] = [];
   if (startNodeInp && !startNodeInp.value) startNodeInp.value = name;
@@ -240,8 +251,8 @@ function selectNode(name) {
 }
 
 function placeNodesGrid(names) {
-  const canvasDiv = getEl("canvas");
-  if (!canvasDiv) return;
+  const drawingLayer = getDrawingLayer();
+  if (!drawingLayer) return;
 
   if (names.length > MAX_RENDER_NODES) {
     alert("Graph too large for visual rendering. Loaded in data mode only.");
@@ -267,7 +278,7 @@ function placeNodesGrid(names) {
     makeDraggable(div);
     div.onclick = () => selectNode(name);
 
-    canvasDiv.appendChild(div);
+    drawingLayer.appendChild(div);
     nodes[name] = div;
     if (!graph[name]) graph[name] = [];
   });
@@ -356,17 +367,19 @@ function removeEdge() {
   if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 }
 
+// Dragging works in drawing coordinates: the mouse movement is divided by the current zoom level
+// (window.metroZoomScale, 1 on pages without zoom), so a vertex follows the cursor at any zoom.
 function makeDraggable(el) {
-  let offsetX, offsetY;
   el.onmousedown = e => {
-    offsetX = e.offsetX;
-    offsetY = e.offsetY;
+    const scale = window.metroZoomScale || 1;
+    const startMouseX = e.clientX;
+    const startMouseY = e.clientY;
+    const startLeft = el.offsetLeft;
+    const startTop = el.offsetTop;
+
     document.onmousemove = m => {
-      const canvasDiv = getEl("canvas");
-      if (!canvasDiv) return;
-      const rect = canvasDiv.getBoundingClientRect();
-      el.style.left = (m.pageX - rect.left - offsetX) + "px";
-      el.style.top  = (m.pageY - rect.top  - offsetY) + "px";
+      el.style.left = (startLeft + (m.clientX - startMouseX) / scale) + "px";
+      el.style.top  = (startTop  + (m.clientY - startMouseY) / scale) + "px";
       drawEdges();
       if (typeof updateCoords === "function") updateCoords();
       if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
@@ -374,6 +387,8 @@ function makeDraggable(el) {
     };
     document.onmouseup = () => {
       document.onmousemove = null;
+      document.onmouseup = null;
+      refreshZoomExtent();
       if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
       //if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
     };
@@ -657,6 +672,8 @@ function clearGraph(clearInputs=true) {
     if (importMatrixFile) importMatrixFile.value = "";
   }
 
+  refreshZoomExtent();
+
   if (typeof checkAndListOverlappingVertices === "function") {
     checkAndListOverlappingVertices();
   }
@@ -740,6 +757,8 @@ function drawEdges() {
       edgesSvg.appendChild(path);
     });
   }
+
+  refreshZoomExtent();
 }
 
 function buildFromList() {
@@ -869,6 +888,8 @@ function updateCanvasSize(x, y) {
       edgesSvg.setAttribute("height", canvasHeight);
     }
   }
+
+  refreshZoomExtent();
 }
 
 function runForceDirected(allAtOnce) {
@@ -963,8 +984,8 @@ function updateCoords() {
 
     if (listUl) {
       let li = document.createElement("li");
-      li.innerHTML = `<strong>${v}</strong>: x=${x}, y=${y}`;
       li.style.padding = "2px 0";
+      li.innerHTML = `<strong>${v}</strong>: x=${x}, y=${y}`;
       listUl.appendChild(li);
     }
   });

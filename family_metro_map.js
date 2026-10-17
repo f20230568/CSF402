@@ -1216,6 +1216,8 @@ function drawPartialMetroEdges(visibleSet) {
       edgesSvg.appendChild(path);
     });
   }
+
+  if (typeof updateZoomExtent === "function") updateZoomExtent();
 }
 
 // Layout Evaluation Metric: penalizes vertex overlaps, edge crossings, and touching lines
@@ -1873,3 +1875,184 @@ function saveDrawingAsJPG() {
   img.src = url;
 }
 window.saveDrawingAsJPG = saveDrawingAsJPG;
+
+// --- 9. Drawing Window: Zoom (two-finger pinch) and Resize (handle on the lower side) ---
+// The drawing lives in #zoomLayer, which is scaled with a CSS transform. Transforms do not change offsetLeft /
+// offsetTop, so every layout, overlap check and the JPG export keep working in unscaled drawing coordinates.
+// #zoomSizer is given the zoomed size so the scrollbars of #canvas match what is on screen.
+// Touchpad pinch arrives as a wheel event with ctrlKey = true (Chrome, Edge, Firefox) or as gesture events
+// (Safari); both are handled. Normal two-finger scrolling (no pinch) still scrolls the window.
+const METRO_ZOOM_MIN = 0.2;
+const METRO_ZOOM_MAX = 4;
+const METRO_CANVAS_MIN_HEIGHT = 200;
+const METRO_CANVAS_DEFAULT_HEIGHT = 520;
+window.metroZoomScale = 1;
+
+// Recomputes the size of the drawing (vertices, bends, minimum 800 x 450, and at least the visible window)
+// and sizes the zoom layer, the scroll area and the edge SVG to match.
+function updateZoomExtent() {
+  const canvas = getDomEl("canvas");
+  const sizer = getDomEl("zoomSizer");
+  const layer = getDomEl("zoomLayer");
+  const svg = getDomEl("edges");
+  if (!canvas || !sizer || !layer) return;
+
+  const s = window.metroZoomScale || 1;
+  let w = 800;
+  let h = 450;
+
+  if (typeof nodes !== "undefined" && nodes) {
+    Object.keys(nodes).forEach(name => {
+      const el = nodes[name];
+      if (!el || el.style.display === "none") return;
+      w = Math.max(w, el.offsetLeft + 80);
+      h = Math.max(h, el.offsetTop + 80);
+    });
+  }
+  if (window.edgeBends) {
+    Object.keys(window.edgeBends).forEach(k => {
+      const b = window.edgeBends[k];
+      w = Math.max(w, b.x + 60);
+      h = Math.max(h, b.y + 60);
+    });
+  }
+
+  // Fill at least the visible window, so the white drawing area never ends inside the window
+  w = Math.max(w, canvas.clientWidth / s);
+  h = Math.max(h, canvas.clientHeight / s);
+  w = Math.ceil(w);
+  h = Math.ceil(h);
+
+  layer.style.width = w + "px";
+  layer.style.height = h + "px";
+  layer.style.transform = `scale(${s})`;
+  sizer.style.width = Math.ceil(w * s) + "px";
+  sizer.style.height = Math.ceil(h * s) + "px";
+
+  if (svg) {
+    svg.setAttribute("width", w);
+    svg.setAttribute("height", h);
+  }
+}
+window.updateZoomExtent = updateZoomExtent;
+
+// Sets the zoom level. anchorX / anchorY: point inside the visible window (in screen pixels) that stays fixed,
+// e.g. the cursor position during a pinch. Without an anchor the centre of the window is kept in place.
+function setMetroZoom(newScale, anchorX, anchorY) {
+  const canvas = getDomEl("canvas");
+  if (!canvas) return;
+
+  const oldScale = window.metroZoomScale || 1;
+  const s = Math.min(METRO_ZOOM_MAX, Math.max(METRO_ZOOM_MIN, newScale));
+
+  if (anchorX === undefined || anchorY === undefined) {
+    anchorX = canvas.clientWidth / 2;
+    anchorY = canvas.clientHeight / 2;
+  }
+
+  // Drawing coordinates of the anchor point before zooming
+  const drawX = (canvas.scrollLeft + anchorX) / oldScale;
+  const drawY = (canvas.scrollTop + anchorY) / oldScale;
+
+  window.metroZoomScale = s;
+  updateZoomExtent();
+
+  canvas.scrollLeft = drawX * s - anchorX;
+  canvas.scrollTop = drawY * s - anchorY;
+
+  const label = getDomEl("zoomLevel");
+  if (label) label.textContent = Math.round(s * 100) + "%";
+}
+window.setMetroZoom = setMetroZoom;
+
+function zoomMetroBy(factor, anchorX, anchorY) {
+  setMetroZoom((window.metroZoomScale || 1) * factor, anchorX, anchorY);
+}
+window.zoomMetroBy = zoomMetroBy;
+
+function initMetroZoomAndResize() {
+  const canvas = getDomEl("canvas");
+  const handle = getDomEl("canvasResizeHandle");
+  if (!canvas) return;
+
+  const anchorFromEvent = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: e.clientX - rect.left - canvas.clientLeft,
+      y: e.clientY - rect.top - canvas.clientTop
+    };
+  };
+
+  // Two-finger pinch on a touchpad (and Ctrl + mouse wheel): wheel event with ctrlKey
+  canvas.addEventListener("wheel", (e) => {
+    if (!e.ctrlKey) return;          // plain two-finger scroll: let the window scroll normally
+    e.preventDefault();              // stop the browser from zooming the whole page
+    let dy = e.deltaY;
+    if (e.deltaMode === 1) dy *= 16;          // lines -> pixels
+    else if (e.deltaMode === 2) dy *= 400;    // pages -> pixels
+    dy = Math.max(-50, Math.min(50, dy));
+    const a = anchorFromEvent(e);
+    zoomMetroBy(Math.exp(-dy * 0.01), a.x, a.y);
+  }, { passive: false });
+
+  // Safari (macOS) pinch: gesture events with a cumulative scale
+  let gestureStartScale = 1;
+  canvas.addEventListener("gesturestart", (e) => {
+    e.preventDefault();
+    gestureStartScale = window.metroZoomScale || 1;
+  });
+  canvas.addEventListener("gesturechange", (e) => {
+    e.preventDefault();
+    const a = anchorFromEvent(e);
+    setMetroZoom(gestureStartScale * e.scale, a.x, a.y);
+  });
+  canvas.addEventListener("gestureend", (e) => {
+    e.preventDefault();
+  });
+
+  // Resize handle on the lower side: drag up / down to change the height of the drawing window
+  if (handle) {
+    let startY = 0;
+    let startHeight = 0;
+    let dragging = false;
+
+    handle.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      startY = e.clientY;
+      startHeight = canvas.offsetHeight;
+      handle.setPointerCapture(e.pointerId);
+      document.body.style.userSelect = "none";
+      e.preventDefault();
+    });
+
+    handle.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const newHeight = Math.max(METRO_CANVAS_MIN_HEIGHT, startHeight + (e.clientY - startY));
+      canvas.style.height = newHeight + "px";
+      updateZoomExtent();
+    });
+
+    const stopDrag = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.style.userSelect = "";
+      if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId);
+    };
+    handle.addEventListener("pointerup", stopDrag);
+    handle.addEventListener("pointercancel", stopDrag);
+
+    handle.addEventListener("dblclick", () => {
+      canvas.style.height = METRO_CANVAS_DEFAULT_HEIGHT + "px";
+      updateZoomExtent();
+    });
+  }
+
+  window.addEventListener("resize", updateZoomExtent);
+  setMetroZoom(1);
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initMetroZoomAndResize);
+} else {
+  initMetroZoomAndResize();
+}

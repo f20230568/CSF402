@@ -140,6 +140,9 @@
         <button id="fixEdgeOverlapsBtn" onclick="fixMetroEdgeOverlaps(parseFloat(document.getElementById('metroAlpha').value))" style="background:#e67e22; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
           Fix Edge Overlaps
         </button>
+        <button id="randomizeGendersBtn" onclick="randomizeGendersAndRedraw(parseFloat(document.getElementById('metroAlpha').value))" style="background:#4a4a4a; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
+          Randomize Genders
+        </button>
         <button id="saveDrawingBtn" onclick="saveDrawingAsJPG()" style="background:#8e44ad; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
           Save Drawing
         </button>
@@ -163,13 +166,13 @@
   </div>
 
   <div id="paperInfo">
-    <h3>Korst, Pronk & van Wijk (2020)</h3>
+    <h3>Korst, Pronk &amp; van Wijk (2020)</h3>
     <p>A schematic tree layout inspired by the London Underground map:</p>
     
     <strong>1. Tree Verification</strong>
     <p>The input graph must be an <strong>undirected tree</strong> (|E| = |V| - 1 and connected) with no cycles.</p>
 
-    <strong>2. Gender & Line Angles</strong>
+    <strong>2. Gender &amp; Line Angles</strong>
     <div class="formula-box">
       Female: Horizontal / Vertical (even &times; &pi;/4)<br>
       Male: Diagonal (odd &times; &pi;/4)
@@ -216,7 +219,7 @@
 </div>
 
 <script src="app1.js"></script>
-<script src="familymetromap.js"></script>
+<script src="family_metro_map.js"></script>
 <script>
   window.isMetroMode = true;
   window.onload = function() {

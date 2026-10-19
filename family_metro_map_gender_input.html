@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Family Metro Map Visualizer</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  body { font-family: sans-serif; margin: 20px; background: #f4f7f6; }
+  
+  .top-layout {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    margin-bottom: 20px;
+  }
+
+  .controls-section { flex: 1; }
+
+  #paperInfo {
+    width: 420px;
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    font-size: 0.85em;
+  }
+
+  #paperInfo h3 { margin-top: 0; color: #2c3e50; border-bottom: 2px solid #eee; }
+  
+  .formula-box {
+    background: #f8f9fa;
+    border-left: 4px solid #e74c3c;
+    padding: 10px;
+    margin: 10px 0;
+    font-family: 'Courier New', monospace;
+  }
+
+  #canvas {
+    position: relative;
+    width: 100%;
+    height: 520px;
+    border: 2px solid #ccc;
+    border-bottom: none;
+    background: white;
+    overflow: auto;
+    margin-top: 10px;
+    box-sizing: border-box;
+  }
+
+  /* Zoom: #zoomSizer gives the scroll area the zoomed size, #zoomLayer holds the drawing and is scaled */
+  #zoomSizer {
+    position: relative;
+    overflow: hidden;
+  }
+
+  #zoomLayer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+  }
+
+  #edges {
+    position: absolute;
+    top: 0;
+    left: 0;
+    overflow: visible;
+  }
+
+  /* Resize handle on the lower side of the drawing window */
+  #canvasResizeHandle {
+    width: 100%;
+    height: 16px;
+    box-sizing: border-box;
+    border: 2px solid #ccc;
+    border-top: 1px solid #ddd;
+    background: #e9ecef;
+    cursor: ns-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    line-height: 1;
+    color: #555;
+    user-select: none;
+    touch-action: none;
+  }
+
+  #canvasResizeHandle:hover { background: #dde2e6; color: #222; }
+
+  .zoom-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    font-size: 13px;
+  }
+
+  .zoom-bar button {
+    background: #4a4a4a;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 3px 9px;
+    cursor: pointer;
+    font-weight: bold;
+  }
+
+  .zoom-bar .hint { color: #7f8c8d; font-size: 12px; margin-left: 6px; }
+
+  /* Rotated view: vertex labels are turned back so they stay upright */
+  #zoomLayer.rotated90 .node { rotate: -90deg; }
+
+  .node { position: absolute; }
+  .node {
+    width: 16px !important;
+    height: 16px !important;
+    border-width: 2px !important;
+    font-size: 9px !important;
+    font-weight: bold;
+  }
+
+  /* Node Colors */
+  .node-male {
+    background: #3498db !important;
+    border-color: #1b4f72 !important;
+    color: white !important;
+  }
+
+  .node-female {
+    background: #e91e63 !important;
+    border-color: #880e4f !important;
+    color: white !important;
+  }
+
+  .legend-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    vertical-align: middle;
+    margin-right: 3px;
+  }
+</style>
+</head>
+
+<body>
+
+<div class="top-layout">
+  <div class="controls-section">
+    <h2>Family Metro Map Visualizer</h2>
+    <a href="index.html" style="color: blue;">← Back to BFS/DFS Visualizer</a> |
+    <a href="manager.html" style="color: blue;">Go to Graph Drawer (Spring-Embedder)</a> |
+    <a href="family_metro_map.html" style="color: blue;">Go to the original Family Metro Map without Gender Input</a>
+    <br><br>
+
+    <select id="mode" onchange="switchMode()">
+      <option value="visual">Visual Builder</option>
+      <option value="list">Adjacency List</option>
+      <option value="matrix">Adjacency Matrix</option>
+    </select>
+
+    <div id="visualMode">
+      <button id="addNodeBtn">Add Vertex</button>
+      <p>Click two vertices to create an edge (construct an acyclic tree).</p>
+    </div>
+
+    <div id="listMode" style="display:none">
+      <p style="margin: 4px 0; font-size: 12px; color: #555;">Tree only. Mark male vertices with <strong>*</strong> wherever they appear (e.g. <code>*A</code>); unmarked vertices are female.</p>
+      <textarea id="listInput" rows="5" cols="30" placeholder="*A:B,*C&#10;B:*A,D&#10;*C:*A&#10;D:B"></textarea><br>
+      <button id="showListGraphBtn">Show Graph</button>
+      <input type="file" id="importListFile" accept=".txt">
+      <button id="importListBtn">Import List</button>
+    </div>
+
+    <div id="matrixMode" style="display:none">
+      <p style="margin: 4px 0; font-size: 12px; color: #555;">Tree only. Rows are vertices A, B, C, ... in order; put <strong>*</strong> at the beginning of a row to make that vertex male.</p>
+      <textarea id="matrixInput" rows="5" cols="30" placeholder="*0,1,1&#10;1,0,0&#10;*1,0,0"></textarea><br>
+      <button id="showMatrixGraphBtn">Show Graph</button>
+      <input type="file" id="importMatrixFile" accept=".txt">
+      <button id="importMatrixBtn">Import Matrix</button>
+    </div>
+
+    <button id="clearBtn">Clear Graph</button>
+    <button id="exportListBtn">Export List</button>
+    <button id="exportMatrixBtn">Export Matrix</button>
+
+    <br>
+    Root Node:
+    <input id="startNode" style="width:50px" placeholder="A" />
+
+    <div style="background: #eef2f3; padding: 10px; border-radius: 5px; margin-top: 10px; border: 1px solid #ccc;">
+        <strong>Family Metro Map Layout (Korst et al., 2020):</strong>
+        <br><br>
+        <label>Shrinking Factor (&alpha;): 
+          <input type="number" id="metroAlpha" value="0.75" step="0.05" min="0.1" max="1.0" style="width:60px">
+        </label>
+        <button id="runMetroBtn" onclick="runFamilyMetroMapLayout(parseFloat(document.getElementById('metroAlpha').value))" style="background:#e74c3c; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer;">
+          Run Full Metro Layout
+        </button>
+        <button id="stepMetroBtn" onclick="stepBFSMove(parseFloat(document.getElementById('metroAlpha').value))" style="background:#27ae60; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
+          Step by Step BFS Draw
+        </button>
+        <button id="fixOverlapsBtn" onclick="fixMetroOverlaps(parseFloat(document.getElementById('metroAlpha').value))" style="background:#2980b9; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
+          Fix Vertex Overlaps
+        </button>
+        <button id="fixEdgeOverlapsBtn" onclick="fixMetroEdgeOverlaps(parseFloat(document.getElementById('metroAlpha').value))" style="background:#e67e22; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
+          Fix Edge Overlaps
+        </button>
+        <button id="randomizeGendersBtn" onclick="randomizeGendersAndRedraw(parseFloat(document.getElementById('metroAlpha').value))" style="background:#4a4a4a; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
+          Randomize Genders
+        </button>
+        <button id="saveDrawingBtn" onclick="saveDrawingAsJPG()" style="background:#8e44ad; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
+          Save Drawing
+        </button>
+        <div style="margin-top: 8px; font-size: 0.85em;">
+          <strong>Legend:</strong>
+          <span class="legend-dot" style="background: #3498db; margin-left: 6px;"></span> Male (Diagonal)
+          <span class="legend-dot" style="background: #e91e63; margin-left: 10px;"></span> Female (Orthogonal)
+        </div>
+        <p id="status" style="margin-top: 5px; font-weight: bold;"></p>
+    </div>
+
+    <div style="background: #f9f9f9; padding: 10px; border-radius: 5px; margin-top: 10px; border: 1px solid #ddd;">
+        <strong>Vertex Management:</strong>
+        <select id="vertexList"></select>
+        <button id="removeVertexBtn">Remove Vertex</button>
+        <br><br>
+        <strong>Edge Management:</strong>
+        <select id="edgeList"></select> 
+        <button id="removeEdgeBtn">Remove Edge</button>
+    </div>
+  </div>
+
+  <div id="paperInfo">
+    <h3>Korst, Pronk &amp; van Wijk (2020)</h3>
+    <p>A schematic tree layout inspired by the London Underground map:</p>
+    
+    <strong>1. Tree Verification</strong>
+    <p>The input graph must be an <strong>undirected tree</strong> (|E| = |V| - 1 and connected) with no cycles.</p>
+
+    <strong>2. Gender &amp; Line Angles</strong>
+    <div class="formula-box">
+      Female: Horizontal / Vertical (even &times; &pi;/4)<br>
+      Male: Diagonal (odd &times; &pi;/4)
+    </div>
+    <p>Transitions between same-gender nodes are straight; different genders use 45° bends.</p>
+
+    <strong>3. Generation Scaling</strong>
+    <div class="formula-box">
+      Distance = d &times; &alpha;<sup>g</sup>
+    </div>
+    <p>Successive generations <em>g</em> shrink by factor &alpha; &le; 1 to prevent subtree overlap.</p>
+  </div>
+</div>
+
+<!-- BFS Traversal (Layer by Layer) visible directly above the drawing grid -->
+<div id="bfsLayerContainer" style="margin-top: 15px; margin-bottom: 5px; padding: 10px 14px; background: #ffffff; border: 1px solid #b0bec5; border-left: 5px solid #0288d1; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+  <strong style="color: #0277bd; font-size: 13px;">BFS Traversal (Layer by Layer):</strong>
+  <span id="bfsLayersDisplay" style="margin-left: 8px; font-family: monospace; font-size: 13px; color: #263238; font-weight: bold;">[]</span>
+</div>
+
+<div class="zoom-bar">
+  <strong>Zoom:</strong>
+  <button id="zoomOutBtn" onclick="zoomMetroBy(1 / 1.2)" title="Zoom out">−</button>
+  <span id="zoomLevel" style="min-width: 44px; text-align: center; font-weight: bold;">100%</span>
+  <button id="zoomInBtn" onclick="zoomMetroBy(1.2)" title="Zoom in">+</button>
+  <button id="zoomResetBtn" onclick="setMetroZoom(1)" title="Back to 100%">Reset</button>
+  <button id="rotateViewBtn" onclick="toggleMetroRotation()" title="Rotate the view by 90° (the drawing itself is not changed)">⟳ Rotate 90°</button>
+  <span class="hint">Pinch with two fingers on the touchpad (or Ctrl + scroll) to zoom. Drag the bar under the drawing to resize it.</span>
+</div>
+
+<div id="canvas">
+  <div id="zoomSizer">
+    <div id="zoomLayer">
+      <svg id="edges"></svg>
+    </div>
+  </div>
+</div>
+<div id="canvasResizeHandle" title="Drag up or down to resize the drawing window (double-click to reset)">▲▼</div>
+
+<div id="overlapSection" style="margin-top: 20px; padding: 12px; border: 1px solid #e74c3c; border-radius: 5px; background: #fff5f5;">
+  <h3 style="margin: 0 0 8px 0; font-size: 14px; color: #c0392b;">Overlapping Vertices</h3>
+  <ul id="overlapList" style="margin: 0; padding-left: 20px; font-size: 13px; color: #333;">
+    <li style="color: #7f8c8d;">None (Layout has no overlapping vertices)</li>
+  </ul>
+</div>
+
+<div id="edgeOverlapSection" style="margin-top: 15px; padding: 12px; border: 1px solid #e67e22; border-radius: 5px; background: #fffaf0;">
+  <h3 style="margin: 0 0 8px 0; font-size: 14px; color: #d35400;">Overlapping / Touching Edges</h3>
+  <ul id="edgeOverlapList" style="margin: 0; padding-left: 20px; font-size: 13px; color: #333;">
+    <li style="color: #7f8c8d;">None (No edge collisions detected)</li>
+  </ul>
+</div>
+
+<div id="summarySection" style="margin-top: 15px; padding: 12px; border: 1px solid #2980b9; border-radius: 5px; background: #ebf5fb;">
+  <h3 style="margin: 0 0 8px 0; font-size: 14px; color: #1b4f72;">Summary of Changes</h3>
+  <ul id="summaryList" style="margin: 0; padding-left: 20px; font-size: 13px; color: #2c3e50;">
+    <li style="color: #7f8c8d;">No automated adjustments applied.</li>
+  </ul>
+</div>
+
+<script src="app_gender.js"></script>
+<script src="family_metro_map.js"></script>
+<script>
+  window.isMetroMode = true;
+  window.onload = function() {
+    if(typeof switchMode === 'function') switchMode();
+  };
+</script>
+
+</body>
+</html>

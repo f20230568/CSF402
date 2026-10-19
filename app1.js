@@ -38,6 +38,154 @@ function refreshZoomExtent() {
   if (typeof window.updateZoomExtent === "function") window.updateZoomExtent();
 }
 
+// --- View rotation by 90 degrees (only the view: the drawing, coordinates and labels are not changed) ---
+// The drawing layer (#zoomLayer) is shown rotated 90 degrees clockwise so a predominantly vertical drawing can be
+// viewed horizontally and vice versa. Vertex positions (offsetLeft / offsetTop), edges, overlap checks and the
+// saved JPG stay exactly as they are; vertex labels are turned back upright (CSS rule #zoomLayer.rotated90 .node).
+// The rotated drawing keeps the same margins as the original one, so it stays at the left of the window:
+// the original top margin becomes the left margin and the original left margin becomes the top margin.
+// The zoom code computes the unrotated extent; the rotation is applied on top of it every time it runs.
+window.metroViewRotated = false;
+window.metroDragActive = false;
+let baseUpdateZoomExtent = null;
+let metroRotationPivotY = null;        // drawing y that is placed at the left edge of the rotated view
+let metroHeightBeforeRotation = null;  // window height to restore when rotating back
+
+const METRO_ROTATION_MIN_HEIGHT = 200;
+const METRO_ROTATION_SCROLLBAR_ROOM = 24;
+
+function installRotationAwareZoom() {
+  if (baseUpdateZoomExtent) return true;
+  if (typeof window.updateZoomExtent !== "function") return false;
+  baseUpdateZoomExtent = window.updateZoomExtent;
+  window.updateZoomExtent = function () {
+    baseUpdateZoomExtent();
+    applyViewRotation();
+  };
+  return true;
+}
+
+// Bounding box of the drawn vertices and edge bends in drawing coordinates (null when nothing is drawn)
+function getDrawingContentBounds() {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  Object.keys(nodes).forEach(name => {
+    const el = nodes[name];
+    if (!el || el.style.display === "none") return;
+    minX = Math.min(minX, el.offsetLeft);
+    minY = Math.min(minY, el.offsetTop);
+    maxX = Math.max(maxX, el.offsetLeft + el.offsetWidth);
+    maxY = Math.max(maxY, el.offsetTop + el.offsetHeight);
+  });
+  if (minX === Infinity) return null;
+  if (window.edgeBends) {
+    Object.keys(window.edgeBends).forEach(k => {
+      const b = window.edgeBends[k];
+      minX = Math.min(minX, b.x);
+      minY = Math.min(minY, b.y);
+      maxX = Math.max(maxX, b.x);
+      maxY = Math.max(maxY, b.y);
+    });
+  }
+  return { minX: Math.max(0, minX), minY: Math.max(0, minY), maxX, maxY };
+}
+
+// Drawing y placed at the left edge of the rotated view: bottom of the drawing plus the original top margin,
+// so the drawing ends up with the same margin on the left that it had at the top.
+// Kept fixed while a vertex is being dragged, so the view does not shift under the cursor.
+function computeRotationPivotY(layer) {
+  if (window.metroDragActive && metroRotationPivotY !== null) return metroRotationPivotY;
+  const bounds = getDrawingContentBounds();
+  metroRotationPivotY = bounds ? bounds.maxY + bounds.minY : (parseFloat(layer.style.height) || 0);
+  return metroRotationPivotY;
+}
+
+// Rotated mapping (drawing point (x, y) -> scroll-area point): (s * (P - y), s * x), with P = pivot y, s = zoom
+function applyViewRotation() {
+  const canvas = getEl("canvas");
+  const sizer = getEl("zoomSizer");
+  const layer = getEl("zoomLayer");
+  const svg = getEl("edges");
+  if (!canvas || !sizer || !layer) return;
+
+  layer.classList.toggle("rotated90", !!window.metroViewRotated);
+  if (!window.metroViewRotated) return;   // the zoom code has already set the unrotated view
+
+  const s = window.metroZoomScale || 1;
+  const pivot = computeRotationPivotY(layer);
+  const bounds = getDrawingContentBounds();
+  let w = parseFloat(layer.style.width) || 0;
+  let h = parseFloat(layer.style.height) || 0;
+  // Rotated, the drawing's width becomes the scroll height: size it to the drawing (same margin at the bottom
+  // as at the top) and to the window, not to the unrotated window width, so there is no empty area to scroll into
+  if (bounds) w = bounds.maxX + bounds.minX;
+  w = Math.ceil(Math.max(w, canvas.clientHeight / s));
+  h = Math.ceil(Math.max(h, pivot));
+
+  layer.style.width = w + "px";
+  layer.style.height = h + "px";
+  if (svg) {
+    svg.setAttribute("width", w);
+    svg.setAttribute("height", h);
+  }
+  layer.style.transform = `translate(${pivot * s}px, 0px) scale(${s}) rotate(90deg)`;
+  sizer.style.width = Math.ceil(Math.max(pivot * s, canvas.clientWidth)) + "px";
+  sizer.style.height = Math.ceil(Math.max(w * s, canvas.clientHeight)) + "px";
+}
+
+// Window height that shows the whole rotated drawing (its original width, with the same margin at the bottom),
+// limited to the browser window; it is never made smaller than the current height.
+function rotatedWindowHeight(canvas) {
+  const current = canvas.offsetHeight;
+  const bounds = getDrawingContentBounds();
+  if (!bounds) return current;
+  const s = window.metroZoomScale || 1;
+  const needed = Math.ceil((bounds.maxX + bounds.minX) * s) + METRO_ROTATION_SCROLLBAR_ROOM;
+  const cap = Math.max(current, window.innerHeight - 40);
+  return Math.max(METRO_ROTATION_MIN_HEIGHT, current, Math.min(needed, cap));
+}
+
+// Rotate button: toggles between the normal view and the view rotated by 90 degrees.
+// The window height is adjusted to the rotated drawing (and restored when rotating back), and the view is
+// scrolled to the top-left so the drawing sits at the left, like the initial drawing.
+function toggleMetroRotation() {
+  const canvas = getEl("canvas");
+  const layer = getEl("zoomLayer");
+  if (!canvas || !layer) return;
+  if (!installRotationAwareZoom()) return;
+
+  window.metroViewRotated = !window.metroViewRotated;
+  metroRotationPivotY = null;
+
+  if (window.metroViewRotated) {
+    metroHeightBeforeRotation = canvas.offsetHeight;
+    const newHeight = rotatedWindowHeight(canvas);
+    if (newHeight !== canvas.offsetHeight) canvas.style.height = newHeight + "px";
+  } else if (metroHeightBeforeRotation !== null) {
+    canvas.style.height = metroHeightBeforeRotation + "px";
+    metroHeightBeforeRotation = null;
+  }
+
+  window.updateZoomExtent();
+  canvas.scrollLeft = 0;
+  canvas.scrollTop = 0;
+
+  const btn = getEl("rotateViewBtn");
+  if (btn) {
+    btn.textContent = window.metroViewRotated ? "⟲ Rotate Back" : "⟳ Rotate 90°";
+    btn.title = window.metroViewRotated
+      ? "Show the drawing in its original orientation"
+      : "Rotate the view by 90° (the drawing itself is not changed)";
+  }
+}
+window.toggleMetroRotation = toggleMetroRotation;
+
+// Installed once all scripts have loaded (the zoom code is defined in family_metro_map.js)
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", installRotationAwareZoom);
+} else {
+  installRotationAwareZoom();
+}
+
 // Vertex label for index i: A..Z, then A1..Z1, A2..Z2, ... (no ASCII overflow past 'Z')
 function getVertexLabel(i) {
   return String.fromCharCode(65 + (i % 26)) + (i >= 26 ? Math.floor(i / 26) : "");
@@ -369,6 +517,7 @@ function removeEdge() {
 
 // Dragging works in drawing coordinates: the mouse movement is divided by the current zoom level
 // (window.metroZoomScale, 1 on pages without zoom), so a vertex follows the cursor at any zoom.
+// When the view is rotated by 90 degrees, the screen movement is turned back into drawing directions.
 function makeDraggable(el) {
   el.onmousedown = e => {
     const scale = window.metroZoomScale || 1;
@@ -376,10 +525,14 @@ function makeDraggable(el) {
     const startMouseY = e.clientY;
     const startLeft = el.offsetLeft;
     const startTop = el.offsetTop;
+    window.metroDragActive = true;
 
     document.onmousemove = m => {
-      el.style.left = (startLeft + (m.clientX - startMouseX) / scale) + "px";
-      el.style.top  = (startTop  + (m.clientY - startMouseY) / scale) + "px";
+      const dx = (m.clientX - startMouseX) / scale;
+      const dy = (m.clientY - startMouseY) / scale;
+      const rotated = !!window.metroViewRotated;
+      el.style.left = (startLeft + (rotated ? dy : dx)) + "px";
+      el.style.top  = (startTop  + (rotated ? -dx : dy)) + "px";
       drawEdges();
       if (typeof updateCoords === "function") updateCoords();
       if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
@@ -388,6 +541,7 @@ function makeDraggable(el) {
     document.onmouseup = () => {
       document.onmousemove = null;
       document.onmouseup = null;
+      window.metroDragActive = false;
       refreshZoomExtent();
       if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
       //if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();

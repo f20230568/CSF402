@@ -110,6 +110,9 @@
 
   .zoom-bar .hint { color: #7f8c8d; font-size: 12px; margin-left: 6px; }
 
+  /* Rotated view: vertex labels are turned back so they stay upright */
+  #zoomLayer.rotated90 .node { rotate: -90deg; }
+
   .node { position: absolute; }
   .node {
     width: 16px !important;
@@ -150,7 +153,7 @@
     <h2>Family Metro Map Visualizer</h2>
     <a href="index.html" style="color: blue;">← Back to BFS/DFS Visualizer</a> |
     <a href="manager.html" style="color: blue;">Go to Graph Drawer (Spring-Embedder)</a> |
-    <a href="family_metro_map_graph.html" style="color: blue;">Go to the original Family Metro Map (Graphs)</a>
+    <a href="family_metro_map_gender_input.html" style="color: blue;">Go to the Family Metro Map with Gender Input</a>
     <br><br>
 
     <select id="mode" onchange="switchMode()">
@@ -263,6 +266,7 @@
   <span id="zoomLevel" style="min-width: 44px; text-align: center; font-weight: bold;">100%</span>
   <button id="zoomInBtn" onclick="zoomMetroBy(1.2)" title="Zoom in">+</button>
   <button id="zoomResetBtn" onclick="setMetroZoom(1)" title="Back to 100%">Reset</button>
+  <button id="rotateViewBtn" onclick="toggleMetroRotation()" title="Rotate the view by 90° (the drawing itself is not changed)">⟳ Rotate 90°</button>
   <span class="hint">Pinch with two fingers on the touchpad (or Ctrl + scroll) to zoom. Drag the bar under the drawing to resize it.</span>
 </div>
 

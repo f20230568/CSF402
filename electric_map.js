@@ -6,25 +6,31 @@
 //     the 8 octilinear directions k = 0..7 (k * 45 deg), exactly like copper traces on a printed circuit board.
 //  2. Gender rule (from the metro map): the LAST segment of the trace that arrives at a child v is
 //       orthogonal (k even) if v is female, diagonal (k odd) if v is male.
-//     Unlike the metro map, a trace may bend with UNEQUAL segment lengths: shapes are
-//       straight (length a), one 45-deg bend (a then b), or a dogleg / jog (a, c, b with two 45-deg bends that
-//       return to the first direction - the typical PCB "offset"); every length is chosen independently.
+//     A trace may bend with UNEQUAL segment lengths. Shapes:
+//       straight (a), one 45-deg bend (a, b),
+//       dogleg / jog (a, c, b: two 45-deg bends back to the first direction - the PCB "offset"),
+//       chamfered corner (a, c, b: two 45-deg bends in the SAME sense, i.e. a 90-deg turn with a 45-deg chamfer,
+//       the way real boards turn a corner - no sharp 90-deg corners).
 //  3. Generation-by-generation routing (like the metro map's breadth-first order) from a root in each tree
 //     (the tree's centre, or the Root Node given by the user). Children are routed largest sub-tree first.
 //     For every child all candidate traces up to a maximum segment length are enumerated and the cheapest legal one
 //     is taken. A candidate is legal when it
-//       - never passes through a pad or another trace (traces may run on ADJACENT grid lines, giving the dense
-//         parallel "bus" look of a board) and never crosses a diagonal of another trace,
+//       - never passes through a pad or another trace (traces may run on ADJACENT grid lines) and never crosses a
+//         diagonal of another trace,
 //       - ends on a free grid point at least the pad clearance (Chebyshev distance) away from every other pad,
 //       - arrives with the direction its gender demands.
 //     Cost = trace length + bend penalty + compactness x growth of the bounding box (half perimeter)
+//            - BUS BONUS for every step that runs parallel to an existing trace on the neighbouring grid line
+//              (so traces bundle into dense parallel buses that turn together, as on a real board)
 //            - bonus for continuing the parent's line (metro line continuation)
 //            + look-ahead penalties when the new pad has fewer free directions than children, or too little free
 //              room around it for its sub-tree.
-//     If nothing is legal the search length is increased; as a last resort a trace with conflicts is drawn and
-//     reported (this only happens for very crowded pads, e.g. more than 8 incident edges).
-//  4. Forest packing. Each tree is laid out separately, then the trees are packed (skyline / bottom-left packing,
-//     tallest first) towards the chosen board aspect ratio, with the pad clearance as the gap.
+//     If nothing is legal the search length is increased, then a maze router (45-deg turns preferred), then
+//     rip-up and reroute; as a last resort a trace with conflicts is drawn and reported.
+//  4. Forest packing by FOOTPRINT. Each tree is laid out separately; then the trees are placed one by one (largest
+//     first) at the position that keeps the board smallest for the chosen aspect ratio, using their real occupied
+//     grid points (not bounding boxes), so small trees nest into the gaps of bigger ones. The same rules as inside a
+//     tree hold between trees (no shared points, no crossing diagonals, pad clearance).
 //  5. Verification. The final drawing is checked independently of the construction: pads on the same point or too
 //     close, traces through pads, overlapping or crossing traces, and the gender rule for every arrival.
 //  Coordinates on the grid are exact, so all checks are exact.
@@ -34,6 +40,18 @@ const EB_DY = [0, 1, 1, 1, 0, -1, -1, -1];
 const EB_OFF = 20000;
 const EB_SPAN = 40000;
 const ebKey = (x, y) => (x + EB_OFF) * EB_SPAN + (y + EB_OFF);
+const EB_JOG_MAX = 3;                         // longest middle segment of a dogleg / chamfered corner
+// neighbouring parallel grid lines of a step with orientation o = k & 3 (0: -, 1: \, 2: |, 3: /)
+const EB_SIDE = [[[0, 1], [0, -1]], [[1, 0], [-1, 0]], [[1, 0], [-1, 0]], [[1, 0], [-1, 0]]];
+function ebDirOf(dx, dy) {
+  for (let k = 0; k < 8; k++) if (EB_DX[k] === dx && EB_DY[k] === dy) return k;
+  return -1;
+}
+
+const EB_THEMES = {
+  blue:  { board: "#1b4f97", grid: "#3567ad", outline: "#123d78", trace: "#3e8ee0", shine: "#86c3ff", text: "#d6e7ff" },
+  green: { board: "#159447", grid: "#2bb862", outline: "#0b6a31", trace: "#36c96a", shine: "#7fe3a2", text: "#d8f5df" }
+};
 
 window.ebView = { scale: 1, rotated: false, layout: null, check: null, heightBeforeRotation: null };
 
@@ -48,6 +66,8 @@ function ebSettings() {
   const dog = document.getElementById("allowDoglegs");
   const ord = document.getElementById("placementOrder");
   const grid = document.getElementById("showGrid");
+  const theme = document.getElementById("boardTheme");
+  const sq = document.getElementById("squeezeBoard");
   return {
     pitch: ebNum("gridPitch", 18, 12, 40),
     maxSeg: Math.round(ebNum("maxSegment", 6, 2, 12)),
@@ -56,11 +76,16 @@ function ebSettings() {
     aspect: ebNum("boardAspect", 1.6, 0.3, 4),
     doglegs: dog ? dog.checked : true,
     order: ord ? ord.value : "bfs",
+    bus: ebNum("busBundling", 0.5, 0, 1.5),   // bonus per step that runs parallel to a neighbouring trace
+    squeeze: sq ? sq.checked : true,          // rip-up compaction of every tree
+    squeezeMs: ebNum("squeezeMs", 800, 0, 10000),  // time budget of the squeeze pass (shared by all trees)
+    chooseMs: 300,                            // time to look for a smaller conflict-free attempt (shared)
     outward: 0,             // reward per grid step away from the root (0 = off)
     roomPerVertex: 1.5,     // free grid points wanted around a new pad per vertex of its sub-tree
     roomWeight: 1.0,
     roomMaxRadius: 2,       // radius (grid steps) of the free-room look-ahead
-    showGrid: grid ? grid.checked : false
+    showGrid: grid ? grid.checked : false,
+    theme: theme && EB_THEMES[theme.value] ? theme.value : "blue"
   };
 }
 
@@ -93,6 +118,7 @@ function ebLayoutTree(comp, root, S) {
   const pads = new Map();     // key -> vertex
   const trace = new Map();    // key -> edge key (intermediate trace points)
   const diag = new Map();     // square key * 2 + type -> edge key (type 0 = "\", 1 = "/")
+  const ori = new Map();      // key -> [n0, n1, n2, n3]: number of trace steps of each orientation touching the point
   const pos = {}, inDir = {}, paths = {}, forced = [];
   const bb = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
 
@@ -129,11 +155,41 @@ function ebLayoutTree(comp, root, S) {
   const pending = { [root]: children[root].length };   // children of a placed pad that still need a trace
 
   const C = S.clearance;
+  let limit = null;   // optional box the routing must stay inside (used by the squeeze pass)
+  const inLimit = (x, y) => !limit || (x >= limit.minX && x <= limit.maxX && y >= limit.minY && y <= limit.maxY);
   const diagSlot = (x1, y1, x2, y2) => {
     const sx = Math.min(x1, x2), sy = Math.min(y1, y2);
     const type = ((x2 - x1) * (y2 - y1) > 0) ? 0 : 1;
     return { mine: ebKey(sx, sy) * 2 + type, other: ebKey(sx, sy) * 2 + (1 - type) };
   };
+
+  // Orientation bookkeeping of committed traces (used by the bus bonus)
+  function addOri(xs, ys, delta) {
+    for (let i = 1; i < xs.length; i++) {
+      const o = ebDirOf(xs[i] - xs[i - 1], ys[i] - ys[i - 1]) & 3;
+      for (const j of [i - 1, i]) {
+        const key = ebKey(xs[j], ys[j]);
+        let a = ori.get(key);
+        if (!a) { a = [0, 0, 0, 0]; ori.set(key, a); }
+        a[o] += delta;
+        if (a[0] + a[1] + a[2] + a[3] <= 0) ori.delete(key);
+      }
+    }
+  }
+
+  // Bus bonus of the step (ax, ay) -> (bx, by) in direction k: an existing trace runs parallel to it on a
+  // neighbouring grid line (both neighbouring points carry a step of the same orientation)
+  function busGain(ax, ay, bx, by, k) {
+    if (S.bus <= 0) return 0;
+    const o = k & 3;
+    for (const [ox, oy] of EB_SIDE[o]) {
+      const pa = ori.get(ebKey(ax + ox, ay + oy));
+      if (!pa || pa[o] <= 0) continue;
+      const pb = ori.get(ebKey(bx + ox, by + oy));
+      if (pb && pb[o] > 0) return S.bus;
+    }
+    return 0;
+  }
 
   // Free directions around a placed pad (neighbour point free and no crossing diagonal)
   function freeDirsAt(x, y) {
@@ -200,10 +256,12 @@ function ebLayoutTree(comp, root, S) {
 
     const xs = [], ys = [];          // current candidate path (grid points, starting at P)
     const corners = [];              // indices of bend points
-    let len = 0, collisions = 0;
+    const gains = [];                // bus bonus of every step of the candidate
+    let len = 0, collisions = 0, gain = 0;
 
     function free(x, y, k, forcedMode) {
       // returns -1 = blocked, 0 = free, 1 = free only by colliding (forced mode)
+      if (!inLimit(x, y)) return -1;
       const key = ebKey(x, y);
       if (pads.has(key)) return -1;
       let hit = 0;
@@ -235,6 +293,14 @@ function ebLayoutTree(comp, root, S) {
       corners.forEach(consider);
       consider(n);
       const growth = (maxX - minX + maxY - minY) - (bb.maxX - bb.minX + bb.maxY - bb.minY);
+
+      // exact lower bound of the score (look-ahead penalties are >= 0, continuation bonus <= 1): skip the
+      // expensive look-ahead when this candidate cannot beat the best one found so far
+      if (best) {
+        const outwardMax = S.outward * (Math.max(Math.abs(ex), Math.abs(ey)) - Math.max(Math.abs(P.x), Math.abs(P.y)));
+        const lb = len - gain + 0.7 * bends + S.compact * growth - 1.0 - outwardMax + collisions * 400;
+        if (lb >= best.score - 1e-9) return;
+      }
 
       // look-ahead: free directions at the new pad for its own children, and free room for its sub-tree
       let freeDirs = 0;
@@ -269,7 +335,7 @@ function ebLayoutTree(comp, root, S) {
       const outward = S.outward * (Math.max(Math.abs(ex), Math.abs(ey)) - Math.max(Math.abs(P.x), Math.abs(P.y)));
       const lookPen = Math.max(0, kids - freeDirs) * 60;
       const cont = (inDir[u] !== undefined && d1 === inDir[u]) ? 1.0 : 0;
-      const score = len + 0.7 * bends + S.compact * growth + lookPen + roomPen - cont - outward + collisions * 400;
+      const score = len - gain + 0.7 * bends + S.compact * growth + lookPen + roomPen - cont - outward + collisions * 400;
 
       if (!best || score < best.score - 1e-9) {
         best = { score, xs: xs.slice(), ys: ys.slice(), finalDir, bends, collisions };
@@ -311,7 +377,10 @@ function ebLayoutTree(comp, root, S) {
         if (!reserveHit(x, y, 0)) return false;
         reserveHit(x, y, 1);
       }
+      const g = forcedMode ? 0 : busGain(xs[n], ys[n], x, y, k);
       xs.push(x); ys.push(y);
+      gains.push(g);
+      gain += g;
       len += (k & 1) ? Math.SQRT2 : 1;
       collisions += f;
       return true;
@@ -319,6 +388,7 @@ function ebLayoutTree(comp, root, S) {
     function unstep(k, f, forcedMode) {
       if (!forcedMode) reserveHit(xs[xs.length - 1], ys[ys.length - 1], -1);
       xs.pop(); ys.pop();
+      gain -= gains.pop();
       len -= (k & 1) ? Math.SQRT2 : 1;
       collisions -= f;
     }
@@ -335,9 +405,9 @@ function ebLayoutTree(comp, root, S) {
     }
 
     function search(L, jog, forcedMode) {
-      xs.length = 0; ys.length = 0; corners.length = 0; hits.clear(); landHits.clear();
+      xs.length = 0; ys.length = 0; corners.length = 0; gains.length = 0; hits.clear(); landHits.clear();
       xs.push(P.x); ys.push(P.y);
-      len = 0; collisions = 0;
+      len = 0; collisions = 0; gain = 0;
       for (let d1 = 0; d1 < 8; d1++) {
         walk(d1, forcedMode, L, () => {
           if (((d1 & 1) === 0) === wantEven) evaluate(d1, d1, 0);
@@ -346,9 +416,12 @@ function ebLayoutTree(comp, root, S) {
             corners.push(xs.length - 1);
             walk(d2, forcedMode, L, c => {
               if (((d2 & 1) === 0) === wantEven) evaluate(d2, d1, 1);
-              if (jog && c <= 3 && ((d1 & 1) === 0) === wantEven) {
+              // two-bend shapes: the last segment has the parity of d1
+              if (jog && c <= EB_JOG_MAX && ((d1 & 1) === 0) === wantEven) {
                 corners.push(xs.length - 1);
-                walk(d1, forcedMode, L, () => evaluate(d1, d1, 2));
+                walk(d1, forcedMode, L, () => evaluate(d1, d1, 2));            // dogleg: back to d1
+                const d3 = (d2 + s + 8) % 8;
+                walk(d3, forcedMode, L, () => evaluate(d3, d1, 2));            // chamfered 90-deg corner
                 corners.pop();
               }
             });
@@ -358,7 +431,8 @@ function ebLayoutTree(comp, root, S) {
       }
     }
 
-    // Maze router (Lee / Dijkstra on the grid, as used for PCB routing): any number of 45 or 90 degree turns.
+    // Maze router (Lee / Dijkstra on the grid, as used for PCB routing): any number of 45-degree turns; 90-degree
+    // turns are allowed but expensive (a real board chamfers its corners).
     // Used when no straight / one-bend / dogleg trace fits. The state is (grid point, direction of arrival).
     function mazeRoute(strictLookahead) {
       const MAX_EXPANSIONS = 60000;
@@ -396,6 +470,7 @@ function ebLayoutTree(comp, root, S) {
 
       const stepOk = (fx, fy, d) => {
         const x = fx + EB_DX[d], y = fy + EB_DY[d];
+        if (!inLimit(x, y)) return null;
         const k = ebKey(x, y);
         if (pads.has(k) || trace.has(k)) return null;
         if (d & 1) {
@@ -419,7 +494,9 @@ function ebLayoutTree(comp, root, S) {
             }
           }
         }
-        return { x, y, extra };
+        const stepLen = (d & 1) ? Math.SQRT2 : 1;
+        const g = Math.min(busGain(fx, fy, x, y, d), stepLen - 0.2);   // keeps every step cost positive
+        return { x, y, extra: extra - g };
       };
 
       for (let d = 0; d < 8; d++) {
@@ -457,7 +534,7 @@ function ebLayoutTree(comp, root, S) {
           const nd = (st.d + turn + 8) % 8;
           const nx = stepOk(st.x, st.y, nd);
           if (!nx) continue;
-          const nc = c + ((nd & 1) ? Math.SQRT2 : 1) + (turn === 0 ? 0 : (Math.abs(turn) === 1 ? 0.7 : 1.6)) + nx.extra;
+          const nc = c + ((nd & 1) ? Math.SQRT2 : 1) + (turn === 0 ? 0 : (Math.abs(turn) === 1 ? 0.7 : 3.0)) + nx.extra;
           const nk = stateKey(nx.x, nx.y, nd);
           if (!dist.has(nk) || nc < dist.get(nk) - 1e-9) {
             dist.set(nk, nc);
@@ -504,6 +581,7 @@ function ebLayoutTree(comp, root, S) {
       if (y < bb.minY) bb.minY = y;
       if (y > bb.maxY) bb.maxY = y;
     }
+    addOri(best.xs, best.ys, 1);
     inDir[v] = best.finalDir;
     pending[u] = Math.max(0, (pending[u] || 0) - 1);
     pending[v] = children[v].length;
@@ -521,6 +599,7 @@ function ebLayoutTree(comp, root, S) {
       const px = p.xs[i - 1], py = p.ys[i - 1];
       if (p.xs[i] !== px && p.ys[i] !== py) diag.delete(diagSlot(px, py, p.xs[i], p.ys[i]).mine);
     }
+    addOri(p.xs, p.ys, -1);
     pads.delete(ebKey(pos[p.v].x, pos[p.v].y));
     delete pos[p.v];
     delete inDir[p.v];
@@ -532,6 +611,7 @@ function ebLayoutTree(comp, root, S) {
   function snapshot() {
     return {
       pads: new Map(pads), trace: new Map(trace), diag: new Map(diag),
+      ori: new Map(Array.from(ori, ([k, a]) => [k, a.slice()])),
       pos: Object.assign({}, pos), inDir: Object.assign({}, inDir), paths: Object.assign({}, paths),
       pending: Object.assign({}, pending), bb: Object.assign({}, bb), forced: forced.length
     };
@@ -540,6 +620,7 @@ function ebLayoutTree(comp, root, S) {
   function restore(s) {
     const refill = (m, src) => { m.clear(); src.forEach((val, key) => m.set(key, val)); };
     refill(pads, s.pads); refill(trace, s.trace); refill(diag, s.diag);
+    ori.clear(); s.ori.forEach((a, k) => ori.set(k, a.slice()));
     const reobj = (o, src) => { Object.keys(o).forEach(k => delete o[k]); Object.assign(o, src); };
     reobj(pos, s.pos); reobj(inDir, s.inDir); reobj(paths, s.paths); reobj(pending, s.pending);
     Object.assign(bb, s.bb);
@@ -590,18 +671,90 @@ function ebLayoutTree(comp, root, S) {
       route(u, v);
     }
   }
-  return { pos, paths, bb, forced, root };
+
+  // --- Squeeze (rip-up compaction, as in VLSI / PCB layout compaction) ---
+  // Repeatedly takes one side of the bounding box, rips up every sub-tree that touches that side and routes it
+  // again inside the box shrunk by one grid step. A shrink is kept only if everything routes without conflicts.
+  function recomputeBB() {
+    bb.minX = bb.maxX = pos[root].x;
+    bb.minY = bb.maxY = pos[root].y;
+    Object.keys(paths).forEach(ek => {
+      const p = paths[ek];
+      for (let i = 0; i < p.xs.length; i++) {
+        if (p.xs[i] < bb.minX) bb.minX = p.xs[i];
+        if (p.xs[i] > bb.maxX) bb.maxX = p.xs[i];
+        if (p.ys[i] < bb.minY) bb.minY = p.ys[i];
+        if (p.ys[i] > bb.maxY) bb.maxY = p.ys[i];
+      }
+    });
+  }
+  function squeeze(budget) {
+    const t0 = performance.now();
+    let lastDur = 0;
+    const maxRip = Math.max(12, Math.ceil(bfsOrder.length * 0.3));
+    const subtree = v => { const out = [v]; for (let i = 0; i < out.length; i++) out.push(...children[out[i]]); return out; };
+    let fails = 0, side = 0, shrinks = 0;
+    while (fails < 4) {
+      const stepStart = performance.now();
+      if (stepStart - t0 + lastDur > budget) break;   // start a step only if it should finish within the budget
+      const sd = side;
+      side = (side + 1) % 4;
+      recomputeBB();
+      const horizontal = sd < 2;
+      if ((horizontal ? bb.maxX - bb.minX : bb.maxY - bb.minY) < 2) { fails++; continue; }
+      const line = [bb.maxX, bb.minX, bb.maxY, bb.minY][sd];
+      const onLine = (x, y) => (horizontal ? x : y) === line;
+      const lim = Object.assign({}, bb);
+      if (sd === 0) lim.maxX--; else if (sd === 1) lim.minX++; else if (sd === 2) lim.maxY--; else lim.minY++;
+
+      const touch = new Set();
+      Object.keys(pos).forEach(v => { if (onLine(pos[v].x, pos[v].y)) touch.add(v); });
+      Object.keys(paths).forEach(ek => {
+        const p = paths[ek];
+        for (let i = 0; i < p.xs.length; i++) if (onLine(p.xs[i], p.ys[i])) { touch.add(p.v); break; }
+      });
+      if (touch.has(root)) { fails++; continue; }
+      const R = new Set();
+      touch.forEach(v => subtree(v).forEach(w => R.add(w)));
+      if (R.size > maxRip) { fails++; continue; }
+
+      const saved = snapshot();
+      const forcedBefore = forced.length;
+      order.filter(v => R.has(v)).reverse().forEach(v => ripUp([parent[v], v].sort().join("-")));
+      recomputeBB();
+      limit = lim;
+      for (const v of order) if (R.has(v)) route(parent[v], v);
+      limit = null;
+      if (forced.length > forcedBefore) { restore(saved); fails++; }
+      else { fails = 0; shrinks++; }
+      lastDur = performance.now() - stepStart;
+    }
+    recomputeBB();
+    return shrinks;
+  }
+  const result = { pos, paths, bb, forced, root, shrinks: 0 };
+  // the squeeze works on the internal state, so it can also be run later on a chosen attempt (no re-layout)
+  result.squeeze = budget => {
+    if (bfsOrder.length < 4) return 0;
+    const k = squeeze(budget);
+    result.shrinks += k;
+    return k;
+  };
+  if (S.squeeze) result.squeeze(S.squeezeMs);
+  return result;
 }
 
 // A tree whose routing needed conflicting traces is laid out again: with the user's settings plus a radial
 // (outward-growing, less compact) variant, from alternative roots (if the user did not fix the root: the
 // highest-degree vertex, the first vertex, neighbours of the centre), then with further setting variants.
-// The result with the fewest conflicts (then the smallest board area) is kept; retries stop after a time budget.
+// The result with the fewest conflicts (then the smallest board at the chosen aspect ratio) is kept; retries stop
+// after a time budget.
 function ebLayoutTreeBest(comp, root, S, rootFixed) {
   const other = S.order === "bfs" ? "dfs" : "bfs";
   const radial = Object.assign({}, S, { compact: S.compact * 0.5, outward: 0.6 });
   const roomy = Object.assign({}, S, { compact: S.compact * 0.5, roomPerVertex: 3, roomMaxRadius: 4 });
   const later = [
+    Object.assign({}, S, { bus: 0 }),
     Object.assign({}, S, { compact: S.compact * 0.5 }),
     Object.assign({}, S, { compact: 0.25 }),
     Object.assign({}, S, { maxSeg: Math.min(12, S.maxSeg + 3), compact: S.compact * 0.5 }),
@@ -617,68 +770,140 @@ function ebLayoutTreeBest(comp, root, S, rootFixed) {
   roots.forEach(r => { attempts.push([r, roomy]); });
   later.forEach(v => roots.forEach(r => attempts.push([r, v])));
 
-  let best = null;
+  // Attempts run without the squeeze pass. Until one is conflict-free, the time budget is BUDGET_MS; after that
+  // further attempts are tried only while they should fit in CHOOSE_MS, to find a smaller conflict-free board.
+  // An extra attempt for a smaller board is started only if it should finish within CHOOSE_MS (judged by the
+  // previous attempt).
+  // The squeeze pass then runs on the chosen attempt itself.
+  let best = null, okSince = null, lastDur = 0;
   const t0 = performance.now();
-  const BUDGET_MS = 4000;
+  const BUDGET_MS = 4000, CHOOSE_MS = S.chooseMs;
+  const plain = v => Object.assign({}, v, { squeeze: false });
   for (const [r, v] of attempts) {
-    if (best && performance.now() - t0 > BUDGET_MS) break;
-    const t = ebLayoutTree(comp, r, v);
-    const area = (t.bb.maxX - t.bb.minX + 1) * (t.bb.maxY - t.bb.minY + 1);
+    const now = performance.now();
+    if (best && now - t0 > BUDGET_MS) break;                      // as before: retries while routes conflict
+    if (okSince !== null && now - okSince + lastDur > CHOOSE_MS) break;
+    const t = ebLayoutTree(comp, r, plain(v));
+    lastDur = performance.now() - now;
+    // board size at the wanted aspect ratio: area of the smallest w/h = aspect box around the tree
+    const bw = t.bb.maxX - t.bb.minX + 1, bh = t.bb.maxY - t.bb.minY + 1;
+    const side = Math.max(bw, bh * S.aspect);
+    const area = side * side / S.aspect;
     if (!best || t.forced.length < best.t.forced.length ||
         (t.forced.length === best.t.forced.length && area < best.area)) {
-      best = { t, area };
+      best = { t, area, r, v };
     }
-    if (best.t.forced.length === 0) break;
+    if (best.t.forced.length === 0 && okSince === null) okSince = performance.now();
   }
+  if (S.squeeze) best.t.squeeze(S.squeezeMs);
   return best.t;
 }
 
-// --- 4. Forest packing ---
+// --- 4. Forest packing by footprint ---
+// Occupied grid points, pads and diagonal slots of a laid-out tree (in its own coordinates)
+function ebFootprint(t) {
+  const pads = [], pts = [], diags = [];
+  const seen = new Set();
+  const addPt = (x, y) => { const k = ebKey(x, y); if (!seen.has(k)) { seen.add(k); pts.push([x, y]); } };
+  Object.keys(t.pos).forEach(n => { pads.push([t.pos[n].x, t.pos[n].y]); addPt(t.pos[n].x, t.pos[n].y); });
+  Object.keys(t.paths).forEach(k => {
+    const p = t.paths[k];
+    for (let i = 0; i < p.xs.length; i++) {
+      addPt(p.xs[i], p.ys[i]);
+      if (i > 0 && p.xs[i] !== p.xs[i - 1] && p.ys[i] !== p.ys[i - 1]) {
+        const dx = p.xs[i] - p.xs[i - 1], dy = p.ys[i] - p.ys[i - 1];
+        diags.push([Math.min(p.xs[i], p.xs[i - 1]), Math.min(p.ys[i], p.ys[i - 1]), dx * dy > 0 ? 0 : 1]);
+      }
+    }
+  });
+  return { pads, pts, diags };
+}
+
 function ebLayoutForest(S) {
   const t0 = performance.now();
   const comps = ebComponents();
   const rootInp = document.getElementById("rootNode");
   const wantedRoot = rootInp && rootInp.value ? rootInp.value.trim().toUpperCase() : "";
 
+  const total = comps.reduce((s, c) => s + c.length, 0);
   const trees = comps.map(comp => {
     const root = (wantedRoot && comp.includes(wantedRoot)) ? wantedRoot : ebTreeCentre(comp);
-    const t = ebLayoutTreeBest(comp, root, S, !!(wantedRoot && comp.includes(wantedRoot)));
-    t.w = t.bb.maxX - t.bb.minX + 1;
-    t.h = t.bb.maxY - t.bb.minY + 1;
+    // the time budgets are shared by the trees in proportion to their size
+    const share = comp.length / total;
+    // (no per-tree minimum: with many small trees the minimums would add up)
+    const St = Object.assign({}, S, { squeezeMs: S.squeezeMs * share, chooseMs: S.chooseMs * share });
+    const t = ebLayoutTreeBest(comp, root, St, !!(wantedRoot && comp.includes(wantedRoot)));
+    t.w = t.bb.maxX - t.bb.minX;
+    t.h = t.bb.maxY - t.bb.minY;
     t.size = comp.length;
+    t.fp = ebFootprint(t);
     return t;
   });
 
-  const gap = S.clearance;
-  const margin = 1;
-  const idx = trees.map((t, i) => i).sort((a, b) =>
-    (trees[b].h - trees[a].h) || (trees[b].w - trees[a].w) || (trees[b].size - trees[a].size) || (a - b));
-  const totalArea = trees.reduce((s, t) => s + (t.w + gap) * (t.h + gap), 0);
-  const maxW = trees.reduce((m, t) => Math.max(m, t.w), 0);
-  const targetW = Math.max(maxW, Math.ceil(Math.sqrt(totalArea * S.aspect)));
+  // Trees are placed one by one, largest footprint first. For every candidate offset the board's new size
+  // max(W, H * aspect) is computed; among the offsets giving the smallest size (then the smallest area, then the
+  // top-left-most) the first legal one is taken. Legal = the same rules as inside a tree: no shared grid point,
+  // no crossing diagonals, pads at least the clearance apart. Small trees therefore fill the gaps of big ones.
+  const C = S.clearance;
+  const occ = new Set();       // occupied grid points (pads and traces) of placed trees
+  const padZone = new Set();   // points closer than the clearance to a placed pad
+  const diagUsed = new Set();  // square key * 2 + type
+  const B = { minX: 0, maxX: 0, minY: 0, maxY: 0, empty: true };
 
-  // Skyline (bottom-left) packing: each tree, tallest first, goes to the lowest position where it fits,
-  // so small trees fill the gaps under and between bigger ones.
-  const sky = new Array(targetW + gap).fill(0);
+  const legal = (fp, ox, oy) => {
+    for (const [x, y] of fp.pads) if (padZone.has(ebKey(x + ox, y + oy))) return false;
+    for (const [x, y] of fp.pts) if (occ.has(ebKey(x + ox, y + oy))) return false;
+    for (const [x, y, ty] of fp.diags) if (diagUsed.has(ebKey(x + ox, y + oy) * 2 + (1 - ty))) return false;
+    return true;
+  };
+  const place = (t, ox, oy) => {
+    t.fp.pts.forEach(([x, y]) => occ.add(ebKey(x + ox, y + oy)));
+    t.fp.pads.forEach(([x, y]) => {
+      for (let dx = -(C - 1); dx <= C - 1; dx++) {
+        for (let dy = -(C - 1); dy <= C - 1; dy++) padZone.add(ebKey(x + ox + dx, y + oy + dy));
+      }
+    });
+    t.fp.diags.forEach(([x, y, ty]) => diagUsed.add(ebKey(x + ox, y + oy) * 2 + ty));
+    if (B.empty) {
+      B.minX = t.bb.minX + ox; B.maxX = t.bb.maxX + ox; B.minY = t.bb.minY + oy; B.maxY = t.bb.maxY + oy;
+      B.empty = false;
+    } else {
+      B.minX = Math.min(B.minX, t.bb.minX + ox); B.maxX = Math.max(B.maxX, t.bb.maxX + ox);
+      B.minY = Math.min(B.minY, t.bb.minY + oy); B.maxY = Math.max(B.maxY, t.bb.maxY + oy);
+    }
+  };
+
+  const idx = trees.map((t, i) => i).sort((a, b) =>
+    (trees[b].fp.pts.length - trees[a].fp.pts.length) || ((trees[b].w + 1) * (trees[b].h + 1) - (trees[a].w + 1) * (trees[a].h + 1)) ||
+    (trees[b].size - trees[a].size) || (a - b));
   const offsets = {};
-  let usedW = 0, usedH = 0;
   idx.forEach(i => {
     const t = trees[i];
-    let bestX = 0, bestY = Infinity;
-    for (let x = 0; x + t.w <= Math.max(targetW, t.w); x++) {
-      let y = 0;
-      for (let c = x; c < x + t.w + gap; c++) y = Math.max(y, sky[c] || 0);   // tree plus its gap on the right
-      if (y < bestY) { bestY = y; bestX = x; }
+    if (B.empty) { offsets[i] = { x: 0, y: 0 }; place(t, 0, 0); return; }
+    // all candidate offsets in scan order (top-left first), sorted by (board size, area); a stable sort keeps
+    // the scan order for ties, so the first legal candidate is the one a full scan would choose
+    const oxMin = B.minX - t.bb.maxX - C, oxMax = B.maxX - t.bb.minX + C;
+    const oyMin = B.minY - t.bb.maxY - C, oyMax = B.maxY - t.bb.minY + C;
+    const cand = [];
+    for (let oy = oyMin; oy <= oyMax; oy++) {
+      for (let ox = oxMin; ox <= oxMax; ox++) {
+        const W = Math.max(B.maxX, t.bb.maxX + ox) - Math.min(B.minX, t.bb.minX + ox);
+        const H = Math.max(B.maxY, t.bb.maxY + oy) - Math.min(B.minY, t.bb.minY + oy);
+        cand.push({ f: Math.max(W, H * S.aspect), area: (W + 1) * (H + 1), ox, oy });
+      }
     }
-    offsets[i] = { x: bestX - t.bb.minX + margin, y: bestY - t.bb.minY + margin };
-    for (let c = bestX; c < bestX + t.w + gap; c++) sky[c] = bestY + t.h + gap;
-    usedW = Math.max(usedW, bestX + t.w);
-    usedH = Math.max(usedH, bestY + t.h);
+    cand.sort((a, b) => (Math.abs(a.f - b.f) > 1e-9 ? a.f - b.f : a.area - b.area));
+    let best = null;
+    for (const c of cand) if (legal(t.fp, c.ox, c.oy)) { best = c; break; }
+    if (!best) best = { ox: B.maxX - t.bb.minX + C + 1, oy: B.minY - t.bb.minY };   // cannot happen: outside is free
+    offsets[i] = { x: best.ox, y: best.oy };
+    place(t, best.ox, best.oy);
   });
 
+  const margin = 1;
   const pos = {}, paths = {}, forced = [], roots = [];
   trees.forEach((t, i) => {
-    const o = offsets[i];
+    const o = { x: offsets[i].x - B.minX + margin, y: offsets[i].y - B.minY + margin };
     Object.keys(t.pos).forEach(n => { pos[n] = { x: t.pos[n].x + o.x, y: t.pos[n].y + o.y }; });
     Object.keys(t.paths).forEach(k => {
       const p = t.paths[k];
@@ -691,11 +916,12 @@ function ebLayoutForest(S) {
   return {
     pos, paths, forced, roots,
     trees: trees.length,
-    gridW: usedW + 2 * margin,
-    gridH: usedH + 2 * margin,
+    gridW: (B.maxX - B.minX) + 2 * margin,
+    gridH: (B.maxY - B.minY) + 2 * margin,
     pitch: S.pitch,
     clearance: S.clearance,
     showGrid: S.showGrid,
+    theme: S.theme,
     ms: performance.now() - t0
   };
 }
@@ -810,13 +1036,15 @@ function ebRender() {
     svg.setAttribute("width", 600);
     svg.setAttribute("height", 160);
     svg.setAttribute("viewBox", "0 0 600 160");
-    svg.innerHTML = `<rect x="0" y="0" width="600" height="160" rx="10" fill="#159447"/>` +
-      `<text x="300" y="85" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#d8f5df">` +
+    const th0 = EB_THEMES[ebSettings().theme];
+    svg.innerHTML = `<rect x="0" y="0" width="600" height="160" rx="10" fill="${th0.board}"/>` +
+      `<text x="300" y="85" text-anchor="middle" font-family="sans-serif" font-size="14" fill="${th0.text}">` +
       `Load a forest (adjacency list / matrix) or add vertices in the Visual Builder.</text>`;
     return;
   }
 
   const p = L.pitch;
+  const th = EB_THEMES[L.theme] || EB_THEMES.blue;
   const { w, h } = ebBoardSize(L);
   const vw = rot ? h : w, vh = rot ? w : h;
   svg.setAttribute("viewBox", `0 0 ${vw} ${vh}`);
@@ -832,21 +1060,23 @@ function ebRender() {
     </radialGradient>
   </defs>`);
   out.push(`<g transform="${rot ? `translate(${h},0) rotate(90)` : ""}">`);
-  out.push(`<rect x="0" y="0" width="${w}" height="${h}" rx="${p * 0.5}" fill="#159447"/>`);
+  out.push(`<rect x="0" y="0" width="${w}" height="${h}" rx="${p * 0.5}" fill="${th.board}"/>`);
 
   if (L.showGrid) {
     const dots = [];
     for (let gx = 1; gx < L.gridW; gx++) {
       for (let gy = 1; gy < L.gridH; gy++) dots.push(`M${gx * p} ${gy * p}h0.01`);
     }
-    out.push(`<path d="${dots.join("")}" stroke="#2bb862" stroke-width="2" stroke-linecap="round"/>`);
+    out.push(`<path d="${dots.join("")}" stroke="${th.grid}" stroke-width="2" stroke-linecap="round"/>`);
   }
 
-  // traces: dark outline + lighter copper-green top, like a board under solder mask
+  // traces: thin copper under solder mask - dark edge, lighter top and a faint highlight, so parallel buses
+  // on neighbouring grid lines stay clearly separated
   const ds = Object.keys(L.paths).map(k => ebPathD(L.paths[k], p));
   out.push(`<g fill="none" stroke-linecap="round" stroke-linejoin="round">`);
-  ds.forEach(d => out.push(`<path d="${d}" stroke="#0b6a31" stroke-width="${(p * 0.36).toFixed(2)}"/>`));
-  ds.forEach(d => out.push(`<path d="${d}" stroke="#36c96a" stroke-width="${(p * 0.22).toFixed(2)}"/>`));
+  ds.forEach(d => out.push(`<path d="${d}" stroke="${th.outline}" stroke-width="${(p * 0.30).toFixed(2)}"/>`));
+  ds.forEach(d => out.push(`<path d="${d}" stroke="${th.trace}" stroke-width="${(p * 0.17).toFixed(2)}"/>`));
+  ds.forEach(d => out.push(`<path d="${d}" stroke="${th.shine}" stroke-opacity="0.45" stroke-width="${(p * 0.05).toFixed(2)}"/>`));
   out.push(`</g>`);
 
   // conflict markers
@@ -857,7 +1087,7 @@ function ebRender() {
   }
 
   // pads
-  const r = p * 0.38;
+  const r = p * 0.36;
   Object.keys(L.pos).sort(ebCompareLabels).forEach(n => {
     const cx = L.pos[n].x * p, cy = L.pos[n].y * p;
     const male = ebGender[n] === "M";
@@ -868,7 +1098,9 @@ function ebRender() {
     out.push(`<g class="pad" data-name="${n}" style="cursor:pointer">`);
     if (sel) out.push(`<circle cx="${cx}" cy="${cy}" r="${r + p * 0.22}" fill="none" stroke="#ffe11a" stroke-width="${Math.max(2, p * 0.12)}"/>`);
     if (isRoot) out.push(`<rect x="${cx - r - p * 0.12}" y="${cy - r - p * 0.12}" width="${2 * r + p * 0.24}" height="${2 * r + p * 0.24}" rx="${p * 0.12}" fill="none" stroke="#c9d1d6" stroke-width="1.2"/>`);
-    out.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#ebSilver)" stroke="${ring}" stroke-width="${Math.max(1.6, p * 0.1).toFixed(2)}"/>`);
+    const rw = Math.max(1.6, p * 0.1);
+    out.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#0b1424" stroke-opacity="0.75" stroke-width="${(rw + 2).toFixed(2)}"/>`);
+    out.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#ebSilver)" stroke="${ring}" stroke-width="${rw.toFixed(2)}"/>`);
     out.push(`<text x="${cx}" y="${cy}" ${rot ? `transform="rotate(-90 ${cx} ${cy})"` : ""} text-anchor="middle" dominant-baseline="central" ` +
       `font-family="Arial, sans-serif" font-weight="bold" font-size="${fs.toFixed(2)}" fill="#1c2226">${n}</text>`);
     out.push(`</g>`);
@@ -903,26 +1135,48 @@ function ebFillList(id, items, emptyText) {
 }
 
 function ebComputeStats(L) {
-  let length = 0, bends = 0, straight = 0, doglegs = 0;
+  let length = 0, bends = 0, straight = 0, doglegs = 0, steps = 0, busSteps = 0;
   const keys = Object.keys(L.paths);
+  // orientations of the steps touching every grid point, per trace (for the bus statistic)
+  const at = new Map();
   keys.forEach(k => {
     const p = L.paths[k];
     for (let i = 1; i < p.xs.length; i++) {
-      length += (p.xs[i] !== p.xs[i - 1] && p.ys[i] !== p.ys[i - 1]) ? Math.SQRT2 : 1;
+      const o = ebDirOf(p.xs[i] - p.xs[i - 1], p.ys[i] - p.ys[i - 1]) & 3;
+      for (const j of [i - 1, i]) {
+        const key = ebKey(p.xs[j], p.ys[j]);
+        if (!at.has(key)) at.set(key, []);
+        at.get(key).push(k + "#" + o);
+      }
+    }
+  });
+  const hasOther = (x, y, k, o) => {
+    const a = at.get(ebKey(x, y));
+    return !!a && a.some(e => e.endsWith("#" + o) && e !== k + "#" + o);
+  };
+  keys.forEach(k => {
+    const p = L.paths[k];
+    for (let i = 1; i < p.xs.length; i++) {
+      const diagStep = p.xs[i] !== p.xs[i - 1] && p.ys[i] !== p.ys[i - 1];
+      length += diagStep ? Math.SQRT2 : 1;
+      steps++;
+      const o = ebDirOf(p.xs[i] - p.xs[i - 1], p.ys[i] - p.ys[i - 1]) & 3;
+      if (EB_SIDE[o].some(([ox, oy]) => hasOther(p.xs[i - 1] + ox, p.ys[i - 1] + oy, k, o) && hasOther(p.xs[i] + ox, p.ys[i] + oy, k, o))) busSteps++;
     }
     bends += p.bends;
     if (p.bends === 0) straight++;
     if (p.bends === 2) doglegs++;
   });
   const V = Object.keys(L.pos).length;
-  const cells = (L.gridW - 1) * (L.gridH - 1);
+  const pts = (L.gridW - 1) * (L.gridH - 1);
   return {
     V, E: keys.length, trees: L.trees,
-    grid: `${L.gridW - 1} × ${L.gridH - 1}`,
+    grid: `${L.gridW - 2} × ${L.gridH - 2}`,
     px: `${Math.round(L.gridW * L.pitch)} × ${Math.round(L.gridH * L.pitch)} px`,
-    density: V ? (V / cells) : 0,
-    cellsPerVertex: V ? (cells / V) : 0,
+    density: V ? (V / pts) : 0,
+    pointsPerVertex: V ? (pts / V) : 0,
     avgLen: keys.length ? length / keys.length : 0,
+    busShare: steps ? busSteps / steps : 0,
     bends, straight, doglegs
   };
 }
@@ -937,9 +1191,10 @@ function ebShowStats(L) {
     `<table class="stats">` +
     `<tr><td>Trees</td><td>${st.trees}</td><td>Vertices / edges</td><td>${st.V} / ${st.E}</td></tr>` +
     `<tr><td>Board (grid steps)</td><td>${st.grid}</td><td>Board (pixels)</td><td>${st.px}</td></tr>` +
-    `<tr><td>Grid cells per vertex</td><td>${st.cellsPerVertex.toFixed(1)}</td><td>Avg. trace length</td><td>${st.avgLen.toFixed(2)} steps</td></tr>` +
+    `<tr><td>Grid points per vertex</td><td>${st.pointsPerVertex.toFixed(1)}</td><td>Avg. trace length</td><td>${st.avgLen.toFixed(2)} steps</td></tr>` +
     `<tr><td>Straight traces</td><td>${st.straight} (${pct(st.straight)})</td><td>Bends (total)</td><td>${st.bends}</td></tr>` +
-    `<tr><td>Doglegs (2 bends)</td><td>${st.doglegs} (${pct(st.doglegs)})</td><td>Layout time</td><td>${Math.round(L.ms)} ms</td></tr>` +
+    `<tr><td>Two-bend traces</td><td>${st.doglegs} (${pct(st.doglegs)})</td><td>Trace steps in buses</td><td>${Math.round(100 * st.busShare)}%</td></tr>` +
+    `<tr><td>Layout time</td><td>${Math.round(L.ms)} ms</td><td></td><td></td></tr>` +
     `</table>`;
 }
 
@@ -962,7 +1217,7 @@ function ebRelayout(message) {
   if (!empty) {
     const L = window.ebView.layout;
     const problems = chk.vertexIssues.length + chk.traceIssues.length + chk.genderIssues.length;
-    text += (text ? " " : "") + `Board drawn: ${L.trees} tree${L.trees === 1 ? "" : "s"} on a ${L.gridW - 1} × ${L.gridH - 1} grid in ${Math.round(L.ms)} ms` +
+    text += (text ? " " : "") + `Board drawn: ${L.trees} tree${L.trees === 1 ? "" : "s"} on a ${L.gridW - 2} × ${L.gridH - 2} grid in ${Math.round(L.ms)} ms` +
       (problems ? `, ${problems} problem${problems === 1 ? "" : "s"} found (see the lists below).` : ", no collisions.");
     if (L.forced.length) text += ` Crowded routes drawn with conflicts: ${L.forced.join(", ")}.`;
   }
@@ -1135,6 +1390,8 @@ function ebInitBoard() {
   on("rotateViewBtn", ebToggleRotation);
   const sg = document.getElementById("showGrid");
   if (sg) sg.onchange = () => { if (window.ebView.layout) { window.ebView.layout.showGrid = sg.checked; ebRender(); } };
+  const bt = document.getElementById("boardTheme");
+  if (bt) bt.onchange = () => { if (window.ebView.layout) window.ebView.layout.theme = bt.value; ebRender(); };
 
   ebRelayout("");
 }

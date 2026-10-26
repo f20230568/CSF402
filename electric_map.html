@@ -145,6 +145,7 @@
         </select>
       </label>
       <label>Compactness: <input type="number" id="compactness" value="1.5" min="0" max="6" step="0.25"></label>
+      <label title="Bonus per grid step that runs parallel to another trace on the neighbouring grid line (0 = off)">Bus bundling: <input type="number" id="busBundling" value="0.5" min="0" max="1.5" step="0.1"></label>
       <label>Board aspect (w / h): <input type="number" id="boardAspect" value="1.6" min="0.3" max="4" step="0.1"></label>
       <label>Placement order:
         <select id="placementOrder">
@@ -152,8 +153,16 @@
           <option value="dfs">Sub-tree by sub-tree (clustered)</option>
         </select>
       </label>
-      <label><input type="checkbox" id="allowDoglegs" checked> Allow doglegs (two 45° bends)</label>
+      <label><input type="checkbox" id="allowDoglegs" checked> Allow two-bend traces (doglegs, chamfered corners)</label>
+      <label title="Rips up the sub-trees on each side of the board and routes them again in a box one grid step smaller, as long as everything still fits"><input type="checkbox" id="squeezeBoard" checked> Squeeze board (rip-up compaction)</label>
+      <label title="Time the squeeze pass may use for the whole forest. More time can give a slightly smaller board.">Squeeze time (ms): <input type="number" id="squeezeMs" value="800" min="0" max="10000" step="100"></label>
       <label><input type="checkbox" id="showGrid"> Show grid</label>
+      <label>Board colour:
+        <select id="boardTheme">
+          <option value="blue">blue</option>
+          <option value="green">green</option>
+        </select>
+      </label>
       <br>
       <button id="runLayoutBtn" class="btn" style="background:#159447;">Run Board Layout</button>
       <button id="randomizeGendersBtn" class="btn" style="background:#4a4a4a;">Randomize Genders</button>
@@ -186,11 +195,12 @@
       <li><strong>Grid &amp; octilinear traces.</strong> Vertices are pads on grid points; edges are traces of unit steps in 8 directions (multiples of 45°).</li>
       <li><strong>Gender rule (from the metro map).</strong>
         <div class="formula-box">Female: last segment horizontal / vertical<br>Male: last segment diagonal</div>
-        Bends may have <em>unequal</em> lengths: straight (a), one 45° bend (a, b), or a dogleg (a, c, b).</li>
+        Segments may have <em>unequal</em> lengths: straight (a), one 45° bend (a, b), a dogleg (a, c, b) or a chamfered corner (a 90° turn cut by a 45° segment, as on a real board).</li>
       <li><strong>Routing.</strong> Each tree grows from its centre (or the Root Node), generation by generation, largest sub-tree first. Every candidate trace is scored:
-        <div class="formula-box">cost = length + 0.7·bends + compactness·Δ(box perimeter) − line continuation + look-ahead</div>
-        Traces may run on adjacent grid lines (dense parallel buses) but never touch pads or other traces, and never cross.</li>
-      <li><strong>Forest packing.</strong> Trees are laid out separately and packed in rows (largest first) towards the chosen board aspect ratio.</li>
+        <div class="formula-box">cost = length − bus·(steps parallel to a neighbouring trace) + 0.7·bends + compactness·Δ(box perimeter) − line continuation + look-ahead</div>
+        The bus bonus makes traces bundle on adjacent grid lines and turn together, like the buses of a circuit board. Traces never touch pads or other traces and never cross.</li>
+      <li><strong>Squeeze.</strong> The sub-trees touching one side of the board are ripped up and routed again inside a box one step smaller; repeated on all four sides while everything still fits without conflicts.</li>
+      <li><strong>Forest packing by footprint.</strong> Trees are placed largest first where the board stays smallest for the chosen aspect ratio, using their real occupied grid points, so small trees nest into the gaps of big ones.</li>
       <li><strong>Verification.</strong> The finished board is checked independently: pad collisions and clearance, traces through pads, overlapping or crossing traces, and the gender rule for every arrival.</li>
     </ol>
     <p style="margin-bottom:0; color:#555;">A pad has at most 8 directions, so a vertex with more than 8 edges cannot be drawn without conflicts (they are reported).</p>

@@ -357,6 +357,7 @@ function checkAndListOverlappingVertices(threshold = 16, options = {}) {
     });
   }
 
+  metroSetBadge("n1", clusters.length);
   return rawPairs;
 }
 window.checkAndListOverlappingVertices = checkAndListOverlappingVertices;
@@ -382,6 +383,8 @@ function checkAndListEdgeOverlaps(rootNode = null, visibleSet = null, options = 
     li.style.color = "#7f8c8d";
     li.textContent = "None (No edge collisions detected)";
     edgeListEl.appendChild(li);
+    window.lastEdgeOverlapClusterKeys = [];
+    metroSetBadge("n2", 0);
     return [];
   }
 
@@ -487,6 +490,7 @@ function checkAndListEdgeOverlaps(rootNode = null, visibleSet = null, options = 
     });
   }
 
+  metroSetBadge("n2", edgeClusters.length);
   return detectedCollisions;
 }
 window.checkAndListEdgeOverlaps = checkAndListEdgeOverlaps;
@@ -501,6 +505,7 @@ function updateSummaryOfChangesSection(root = null) {
   }
 
   const list = root ? getActiveSummary(root) : [];
+  metroSetBadge("n3", list ? list.length : 0);
   summaryList.innerHTML = "";
   if (!list || list.length === 0) {
     const li = document.createElement("li");
@@ -933,6 +938,7 @@ function prepareMetroData(rootNode, alpha) {
 
 // --- 4. Main Controller Function (Instant Draw) ---
 function runFamilyMetroMapLayout(alpha = 0.75, resetOverrides = true) {
+  const layoutStart = performance.now();
   const statusElem = getDomEl("status");
   const startNodeInp = getDomEl("startNode");
   const bfsDisplayElem = getDomEl("bfsLayersDisplay");
@@ -1012,10 +1018,18 @@ function runFamilyMetroMapLayout(alpha = 0.75, resetOverrides = true) {
   checkAndListEdgeOverlaps(rootNode);
   updateSummaryOfChangesSection(rootNode);
   
+  window.metroLastLayoutMs = performance.now() - layoutStart;
   if (statusElem) {
-    statusElem.innerText = `Family Metro Map layout applied (Root: ${rootNode}, α = ${alpha}). Blue = Male, Pink = Female.` +
-      describeMetroLargeTreeConfig(getMetroLargeTreeConfig(rootNode, alpha), alpha);
+    statusElem.innerText = `Family Metro Map layout applied (Root: ${rootNode}, α = ${alpha}) in ${Math.round(window.metroLastLayoutMs)} ms.` +
+      describeMetroLargeTreeConfig(getMetroLargeTreeConfig(rootNode, alpha), alpha) + " " + metroOverlapSummary();
   }
+
+  // A fresh layout is fitted to the window and drawn in from the root, generation by generation
+  if (resetOverrides) {
+    metroFitToWindow(1.5);
+    metroPlayDrawAnimation(rootNode);
+  }
+  metroUpdateStats();
 }
 
 // --- 5. Step-by-Step BFS Metro Drawer ---
@@ -1103,10 +1117,11 @@ function stepBFSMove(alpha = 0.75) {
   const state = window.stepBfsState;
 
   if (state.stepIndex >= state.order.length) {
-    if (statusElem) statusElem.innerText = "FULL TREE DRAWN";
     checkAndListOverlappingVertices(16, { highlightNew: state.seenVertexOverlaps || [] });
     checkAndListEdgeOverlaps(rootNode, new Set(state.order), { highlightNew: state.seenEdgeCollisions || [] });
     updateSummaryOfChangesSection(rootNode);
+    if (statusElem) statusElem.innerText = "FULL TREE DRAWN. " + metroOverlapSummary();
+    metroUpdateStats();
     return;
   }
 
@@ -1154,6 +1169,7 @@ function stepBFSMove(alpha = 0.75) {
 
   drawPartialMetroEdges(placedSet);
   if (typeof updateCoords === "function") updateCoords();
+  metroAnimateStep(currNode);
 
   // Incrementally reveal vertex overlaps: only visible vertices are checked,
   // and overlap groups that appeared in this step are highlighted as NEW.
@@ -1169,8 +1185,9 @@ function stepBFSMove(alpha = 0.75) {
 
   updateSummaryOfChangesSection(rootNode);
 
+  metroUpdateStats();
   if (state.stepIndex >= state.order.length) {
-    if (statusElem) statusElem.innerText = "FULL TREE DRAWN";
+    if (statusElem) statusElem.innerText = "FULL TREE DRAWN. " + metroOverlapSummary();
   } else {
     if (statusElem) {
       statusElem.innerText = `BFS Drawing Node (${currNode}) [${state.stepIndex} / ${state.order.length}]. Click again to advance.`;
@@ -1213,6 +1230,9 @@ function drawPartialMetroEdges(visibleSet) {
       path.setAttribute("stroke-width", "2.5");
       path.setAttribute("fill", "transparent");
       path.setAttribute("stroke-linejoin", "round");
+      path.setAttribute("data-u", u);
+      path.setAttribute("data-v", v);
+      path.setAttribute("pathLength", "1");
       edgesSvg.appendChild(path);
     });
   }
@@ -1517,6 +1537,8 @@ function fixMetroOverlaps(alpha = 0.75) {
   checkAndListOverlappingVertices();
   checkAndListEdgeOverlaps(rootNode);
   updateSummaryOfChangesSection(rootNode);
+  metroPlayDrawAnimation(rootNode);
+  metroUpdateStats();
 
   if (statusElem) {
     if (finalEval.overlapCount === 0) {
@@ -1685,6 +1707,8 @@ function fixMetroEdgeOverlaps(alpha = 0.75) {
   checkAndListOverlappingVertices();
   checkAndListEdgeOverlaps(rootNode);
   updateSummaryOfChangesSection(rootNode);
+  metroPlayDrawAnimation(rootNode);
+  metroUpdateStats();
 
   if (statusElem) {
     if (finalEval.lineIntersections === 0) {
@@ -2042,7 +2066,7 @@ function initMetroZoomAndResize() {
     handle.addEventListener("pointercancel", stopDrag);
 
     handle.addEventListener("dblclick", () => {
-      canvas.style.height = METRO_CANVAS_DEFAULT_HEIGHT + "px";
+      if (!metroFitWindowHeight()) canvas.style.height = METRO_CANVAS_DEFAULT_HEIGHT + "px";
       updateZoomExtent();
     });
   }
@@ -2055,4 +2079,368 @@ if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", initMetroZoomAndResize);
 } else {
   initMetroZoomAndResize();
+}
+
+// --- 10. Dynamic page behaviour (as on the Electric Board Map) ---
+// Live redraw after every change, fit-to-window, draw-in animation from the root, hover highlight with a tooltip,
+// live statistics, report counters, status colours, segmented mode switch, map style and a sample tree on start.
+
+// Counter badge next to a report heading (n1 = overlapping vertices, n2 = edge collisions, n3 = summary)
+function metroSetBadge(id, value) {
+  const el = getDomEl(id);
+  if (el) el.textContent = value;
+}
+
+// Sets the status text with an explicit colour: "good", "bad", "busy", "info" (otherwise it is inferred from the text)
+function metroSetStatus(text, kind) {
+  const st = getDomEl("status");
+  if (!st) return;
+  window.metroStatusKindNext = kind || null;
+  st.textContent = text;
+}
+window.metroSetStatus = metroSetStatus;
+
+// One sentence about the overlap lists that were filled last
+function metroOverlapSummary() {
+  const v = (window.lastVertexOverlapClusterKeys || []).length;
+  const e = (window.lastEdgeOverlapClusterKeys || []).length;
+  if (v === 0 && e === 0) return "No overlapping vertices or edges.";
+  const parts = [];
+  if (v) parts.push(`${v} overlapping vertex group${v === 1 ? "" : "s"}`);
+  if (e) parts.push(`${e} edge collision group${e === 1 ? "" : "s"}`);
+  return parts.join(" and ") + " found: use the Fix buttons.";
+}
+
+function metroCurrentRoot() {
+  const inp = getDomEl("startNode");
+  const r = inp && inp.value ? inp.value.trim().toUpperCase() : "";
+  return graph[r] ? r : Object.keys(graph)[0];
+}
+
+function metroCurrentAlpha() {
+  const v = parseFloat((getDomEl("metroAlpha") || {}).value);
+  return isFinite(v) ? v : 0.75;
+}
+
+// Breadth-first generation and parent of every vertex reachable from the root
+function metroBfsInfo(root) {
+  const depth = {}, parent = {};
+  if (!root || !graph[root]) return { depth, parent };
+  depth[root] = 0;
+  parent[root] = null;
+  const queue = [root];
+  for (let i = 0; i < queue.length; i++) {
+    const u = queue[i];
+    (graph[u] || []).forEach(e => {
+      if (!(e.to in depth)) {
+        depth[e.to] = depth[u] + 1;
+        parent[e.to] = u;
+        queue.push(e.to);
+      }
+    });
+  }
+  return { depth, parent };
+}
+
+// --- Fit: zoom so the whole drawing fits, and size the window to it (up to the browser height) ---
+function metroFitWindowHeight() {
+  const canvas = getDomEl("canvas");
+  if (!canvas || typeof getDrawingContentBounds !== "function") return false;
+  const b = getDrawingContentBounds();
+  if (!b) return false;
+  const s = window.metroZoomScale || 1;
+  const rot = !!window.metroViewRotated;
+  const vh = rot ? (b.maxX + b.minX) : (b.maxY + b.minY);
+  const cap = Math.max(320, window.innerHeight - 140);
+  canvas.style.height = Math.round(Math.min(cap, Math.max(260, vh * s + 26))) + "px";
+  return true;
+}
+
+function metroFitToWindow(maxScale) {
+  const canvas = getDomEl("canvas");
+  if (!canvas || typeof getDrawingContentBounds !== "function") return;
+  const b = getDrawingContentBounds();
+  if (!b) return;
+  const rot = !!window.metroViewRotated;
+  const W = b.maxX + b.minX, H = b.maxY + b.minY;       // the drawing plus the same margin on the far side
+  const vw = rot ? H : W, vh = rot ? W : H;
+  const cap = Math.max(320, window.innerHeight - 140);
+  const s = Math.max(METRO_ZOOM_MIN, Math.min((canvas.clientWidth - 12) / vw, (cap - 26) / vh, maxScale || METRO_ZOOM_MAX));
+  canvas.style.height = Math.round(Math.min(cap, Math.max(260, vh * s + 26))) + "px";
+  setMetroZoom(s);
+  canvas.scrollLeft = 0;
+  canvas.scrollTop = 0;
+}
+window.metroFitToWindow = metroFitToWindow;
+
+// --- Draw-in animation: the map grows from the root, one generation after the other ---
+function metroAnimationOn() {
+  const t = getDomEl("animateDrawing");
+  return !t || t.checked;
+}
+
+function metroPlayDrawAnimation(root) {
+  const layer = getDomEl("zoomLayer"), svg = getDomEl("edges");
+  if (!layer || !svg || !metroAnimationOn()) return;
+  const { depth } = metroBfsInfo(root || metroCurrentRoot());
+  const maxD = Math.max(1, ...Object.values(depth));
+  const step = Math.min(0.14, 1.3 / maxD);
+  Object.keys(nodes).forEach(n => {
+    if (nodes[n]) nodes[n].style.animationDelay = ((depth[n] || 0) * step).toFixed(3) + "s";
+  });
+  svg.querySelectorAll("path").forEach(p => {
+    const d = Math.max(depth[p.getAttribute("data-u")] || 0, depth[p.getAttribute("data-v")] || 0);
+    p.style.animationDelay = (Math.max(0, d - 1) * step).toFixed(3) + "s";
+  });
+  layer.classList.remove("animate");
+  void layer.offsetWidth;                  // restart the CSS animation
+  layer.classList.add("animate");
+  clearTimeout(window.metroAnimTimer);
+  window.metroAnimTimer = setTimeout(() => {
+    layer.classList.remove("animate");
+    Object.keys(nodes).forEach(n => { if (nodes[n]) nodes[n].style.animationDelay = ""; });
+    svg.querySelectorAll("path").forEach(p => { p.style.animationDelay = ""; });
+  }, (maxD * step + 0.9) * 1000);
+}
+window.metroPlayDrawAnimation = metroPlayDrawAnimation;
+
+// Step-by-step BFS draw: the new vertex pops in and its line is drawn in
+function metroAnimateStep(name) {
+  const svg = getDomEl("edges");
+  if (!svg || !nodes[name] || !metroAnimationOn()) return;
+  svg.querySelectorAll(`path[data-u="${name}"], path[data-v="${name}"]`).forEach(p => p.classList.add("grow"));
+  nodes[name].classList.remove("pop-in");
+  void nodes[name].offsetWidth;
+  nodes[name].classList.add("pop-in");
+  setTimeout(() => { if (nodes[name]) nodes[name].classList.remove("pop-in"); }, 700);
+}
+
+// --- Live redraw after every change (latest request wins; the page stays responsive) ---
+let metroAutoTimer = null;
+function scheduleMetroAutoLayout(message) {
+  const auto = getDomEl("autoLayout");
+  const msg = message || "";
+  if (auto && !auto.checked) {
+    metroSetStatus((msg ? msg + " " : "") + "Run the layout again to update the drawing.", "info");
+    metroUpdateStats();
+    return;
+  }
+  metroSetStatus("Drawing the metro map…", "busy");
+  clearTimeout(metroAutoTimer);
+  metroAutoTimer = setTimeout(() => {
+    metroAutoTimer = null;
+    if (Object.keys(graph).length === 0) {
+      metroSetStatus((msg ? msg + " " : "") + "Load a tree or add vertices in the visual builder.", "info");
+      metroUpdateStats();
+      return;
+    }
+    const check = verifyGraphIsTree();
+    if (!check.isTree) {
+      metroSetStatus((msg ? msg + " " : "") + "Not a tree yet, so the map is not redrawn: " + check.reason, "info");
+      metroUpdateStats();
+      return;
+    }
+    runFamilyMetroMapLayout(metroCurrentAlpha(), true);
+    const st = getDomEl("status");
+    if (st && msg) {
+      window.metroStatusKindNext = null;
+      st.textContent = msg + " " + st.textContent;
+    }
+  }, 30);
+}
+window.scheduleMetroAutoLayout = scheduleMetroAutoLayout;
+
+// --- Live statistics ---
+function metroUpdateStats() {
+  const box = getDomEl("statsBox");
+  if (!box) return;
+  const names = Object.keys(nodes).filter(n => nodes[n] && nodes[n].style.display !== "none");
+  if (names.length === 0) {
+    box.innerHTML = "<em>No drawing yet.</em>";
+    return;
+  }
+  const visible = new Set(names);
+  const root = metroCurrentRoot();
+  const { depth } = metroBfsInfo(root);
+  const gens = Math.max(0, ...names.map(n => (depth[n] !== undefined ? depth[n] : 0))) + 1;
+  let males = 0;
+  names.forEach(n => { if (getNodeGender(n) === "M") males++; });
+
+  // edges, bends, line lengths (between vertex centres, through the bend)
+  let E = 0, bends = 0, total = 0;
+  const seen = new Set();
+  Object.keys(graph).forEach(u => {
+    (graph[u] || []).forEach(e => {
+      const v = e.to;
+      const k = [u, v].sort().join("-");
+      if (seen.has(k) || !visible.has(u) || !visible.has(v)) return;
+      seen.add(k);
+      E++;
+      const a = { x: nodes[u].offsetLeft + 8, y: nodes[u].offsetTop + 8 };
+      const c = { x: nodes[v].offsetLeft + 8, y: nodes[v].offsetTop + 8 };
+      const bend = window.edgeBends && (window.edgeBends[`${u}-${v}`] || window.edgeBends[`${v}-${u}`]);
+      if (bend) {
+        bends++;
+        total += Math.hypot(bend.x - a.x, bend.y - a.y) + Math.hypot(c.x - bend.x, c.y - bend.y);
+      } else {
+        total += Math.hypot(c.x - a.x, c.y - a.y);
+      }
+    });
+  });
+
+  let minDist = Infinity;
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      const a = nodes[names[i]], b = nodes[names[j]];
+      const d = Math.hypot(a.offsetLeft - b.offsetLeft, a.offsetTop - b.offsetTop);
+      if (d < minDist) minDist = d;
+    }
+  }
+
+  const bounds = typeof getDrawingContentBounds === "function" ? getDrawingContentBounds() : null;
+  const size = bounds ? `${Math.round(bounds.maxX - bounds.minX)} × ${Math.round(bounds.maxY - bounds.minY)} px` : "-";
+  const vGroups = (window.lastVertexOverlapClusterKeys || []).length;
+  const eGroups = (window.lastEdgeOverlapClusterKeys || []).length;
+
+  let alphaText = metroCurrentAlpha().toString();
+  try {
+    if (verifyGraphIsTree().isTree) {
+      const cfg = getMetroLargeTreeConfig(root, metroCurrentAlpha());
+      if (cfg && cfg.alphaFactor < 1) alphaText += ` (effective ${+(metroCurrentAlpha() * cfg.alphaFactor).toFixed(3)})`;
+    }
+  } catch (err) { /* statistics never block the page */ }
+
+  const pct = n => (E ? Math.round(100 * n / E) + "%" : "-");
+  const ms = window.metroLastLayoutMs;
+  box.innerHTML =
+    `<table class="stats">` +
+    `<tr><td>Vertices / edges</td><td>${names.length} / ${E}</td><td>Root</td><td>${root || "-"}</td></tr>` +
+    `<tr><td>Generations</td><td>${gens}</td><td>Male / female</td><td>${males} / ${names.length - males}</td></tr>` +
+    `<tr><td>Straight lines</td><td>${E - bends} (${pct(E - bends)})</td><td>Bended lines (45°)</td><td>${bends} (${pct(bends)})</td></tr>` +
+    `<tr><td>Drawing size</td><td>${size}</td><td>Avg. line length</td><td>${E ? (total / E).toFixed(1) + " px" : "-"}</td></tr>` +
+    `<tr><td>Min. vertex distance</td><td>${isFinite(minDist) ? minDist.toFixed(1) + " px" : "-"}</td><td>Shrinking factor α</td><td>${alphaText}</td></tr>` +
+    `<tr><td>Overlap groups (vertex / edge)</td><td>${vGroups} / ${eGroups}</td><td>Layout time</td><td>${ms !== undefined ? Math.round(ms) + " ms" : "-"}</td></tr>` +
+    `</table>`;
+}
+window.metroUpdateStats = metroUpdateStats;
+
+// --- Sample tree, so the page opens with a map to look at ---
+function metroLoadSampleTree(text) {
+  const box = getDomEl("listInput");
+  if (!box || Object.keys(graph).length > 0) return;
+  if (!box.value) box.value = text;
+  const modeSel = getDomEl("mode");
+  if (modeSel) modeSel.value = "list";
+  const seg = getDomEl("modeSeg");
+  if (seg) seg.querySelectorAll("button[data-mode]").forEach(b => b.classList.toggle("on", b.dataset.mode === "list"));
+  if (typeof switchMode === "function") switchMode();
+  if (typeof buildFromList === "function") buildFromList();
+}
+window.metroLoadSampleTree = metroLoadSampleTree;
+
+function metroInitDynamic() {
+  // status colour: explicit kind, else inferred from the text
+  const st = getDomEl("status");
+  if (st && window.MutationObserver) {
+    new MutationObserver(() => {
+      const forced = window.metroStatusKindNext;
+      window.metroStatusKindNext = null;
+      const t = st.textContent || "";
+      const kind = forced ||
+        (/error|rejected|not a valid|could not|remaining|partial|use the fix/i.test(t) ? "bad" :
+         /no overlapping|no edge collisions|fixed|resolved|optimal|full tree drawn/i.test(t) ? "good" : "");
+      st.classList.remove("good", "bad", "busy", "info");
+      if (kind) st.classList.add(kind);
+    }).observe(st, { childList: true, characterData: true, subtree: true });
+  }
+
+  // segmented control drives the (hidden) mode select
+  const seg = getDomEl("modeSeg"), modeSel = getDomEl("mode");
+  if (seg && modeSel) {
+    seg.addEventListener("click", e => {
+      const b = e.target.closest ? e.target.closest("button[data-mode]") : null;
+      if (!b) return;
+      seg.querySelectorAll("button[data-mode]").forEach(x => x.classList.toggle("on", x === b));
+      modeSel.value = b.dataset.mode;
+      if (typeof switchMode === "function") switchMode();
+    });
+  }
+
+  const fit = getDomEl("fitBtn");
+  if (fit) fit.onclick = () => metroFitToWindow(3);
+
+  // map style (light paper / dark)
+  const style = getDomEl("mapStyle"), canvas = getDomEl("canvas");
+  if (style && canvas) {
+    const apply = () => canvas.classList.toggle("map-dark", style.value === "dark");
+    style.onchange = apply;
+    apply();
+  }
+
+  // changing α or the root redraws the map (when the live redraw is on)
+  ["metroAlpha", "startNode"].forEach(id => {
+    const el = getDomEl(id);
+    if (el) el.addEventListener("change", () => {
+      if (Object.keys(graph).length) scheduleMetroAutoLayout(id === "metroAlpha" ? `α set to ${metroCurrentAlpha()}.` : "Root changed.");
+    });
+  });
+
+  // hover: light up the lines of a vertex and its neighbours, and show a tooltip
+  const layer = getDomEl("zoomLayer"), svg = getDomEl("edges"), tip = getDomEl("tip");
+  if (layer && svg) {
+    let current = null;
+    const clear = () => {
+      if (!current) return;
+      layer.classList.remove("hovering");
+      layer.querySelectorAll(".hl, .hl-main").forEach(e => e.classList.remove("hl", "hl-main"));
+      if (tip) tip.classList.remove("on");
+      current = null;
+    };
+    layer.addEventListener("mouseover", e => {
+      if (window.metroDragActive) { clear(); return; }
+      const el = e.target.closest ? e.target.closest(".node") : null;
+      if (!el) { clear(); return; }
+      const name = Object.keys(nodes).find(n => nodes[n] === el);
+      if (!name || name === current) return;
+      clear();
+      current = name;
+      layer.classList.add("hovering");
+      el.classList.add("hl-main");
+      svg.querySelectorAll(`path[data-u="${name}"], path[data-v="${name}"]`).forEach(p => p.classList.add("hl"));
+      const nbrs = (graph[name] || []).map(x => x.to).sort(typeof compareVertexLabels === "function" ? compareVertexLabels : undefined);
+      nbrs.forEach(m => { if (nodes[m]) nodes[m].classList.add("hl"); });
+      if (!tip) return;
+      const root = metroCurrentRoot();
+      const { depth, parent } = metroBfsInfo(root);
+      const male = getNodeGender(name) === "M";
+      const par = parent[name];
+      const kids = nbrs.length - (par ? 1 : 0);
+      tip.innerHTML =
+        `<b>${name}</b> <span style="color:${male ? "#4aa3ff" : "#ff4f9a"}">${male ? "male" : "female"}</span>` +
+        (name === root ? ` <span class="k">· root</span>` : "") +
+        `<div class="k">${depth[name] !== undefined ? `generation ${depth[name]}` : "not connected to the root"}` +
+        `${par ? ` · parent <b style="font-size:12.5px;color:#e6ecf8">${par}</b>` : ""}</div>` +
+        `<div class="k">${kids} child${kids === 1 ? "" : "ren"}${nbrs.length ? ` · connected to ${nbrs.join(", ")}` : ""}</div>`;
+      tip.classList.add("on");
+    });
+    layer.addEventListener("mousemove", e => {
+      if (!current || !tip) return;
+      if (window.metroDragActive) { clear(); return; }
+      const pad = 14, r = tip.getBoundingClientRect();
+      let x = e.clientX + pad, y = e.clientY + pad;
+      if (x + r.width > window.innerWidth - 8) x = e.clientX - r.width - pad;
+      if (y + r.height > window.innerHeight - 8) y = e.clientY - r.height - pad;
+      tip.style.left = x + "px";
+      tip.style.top = y + "px";
+    });
+    layer.addEventListener("mouseleave", clear);
+  }
+
+  metroUpdateStats();
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", metroInitDynamic);
+} else {
+  metroInitDynamic();
 }

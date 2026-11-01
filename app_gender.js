@@ -243,12 +243,61 @@ function notifyGraphChanged() {
   }
 
   const statusP = getEl("status");
-  if (statusP && window.isMetroMode) {
+  if (window.isMetroMode) {
     const v = Object.keys(graph).length;
     let degree = 0;
     for (const u in graph) degree += (graph[u] || []).length;
-    statusP.textContent = `Graph changed: ${v} vertices, ${degree / 2} edges. Run the layout again to update the drawing.`;
+    const msg = `Graph changed: ${v} vertices, ${degree / 2} edges.`;
+    if (typeof window.scheduleMetroAutoLayout === "function") {
+      window.scheduleMetroAutoLayout(msg);          // redraws the map when the graph is a tree (live redraw)
+    } else if (statusP) {
+      statusP.textContent = msg + " Run the layout again to update the drawing.";
+    }
   }
+}
+
+// Status text with an optional colour (see metroSetStatus in family_metro_map.js)
+function setAppStatus(text, kind) {
+  if (typeof window.metroSetStatus === "function") { window.metroSetStatus(text, kind); return; }
+  const statusP = getEl("status");
+  if (statusP) statusP.textContent = text;
+}
+
+// Gender of a vertex as the map draws it ("M" / "F"); null on pages without the metro map code
+function appVertexGender(name) {
+  if (typeof getNodeGender === "function") return getNodeGender(name);
+  if (nodes[name] && nodes[name].dataset && nodes[name].dataset.gender) return nodes[name].dataset.gender.toUpperCase();
+  return null;
+}
+
+// Colours a vertex by its gender (blue = male, pink = female)
+function colourVertexByGender(name) {
+  const el = nodes[name];
+  const g = appVertexGender(name);
+  if (!el || !g) return;
+  el.classList.remove("node-male", "node-female");
+  el.classList.add(g === "M" ? "node-male" : "node-female");
+}
+
+// Toggle Gender button: switches the gender of the vertex chosen in Vertex Management and redraws
+function toggleVertexGender() {
+  const vertexList = getEl("vertexList");
+  const v = vertexList ? vertexList.value : "";
+  if (!v || !nodes[v]) return;
+  const now = appVertexGender(v) === "M" ? "F" : "M";
+  nodes[v].dataset.gender = now;
+  if (window.metroOverridesByRoot) {
+    Object.keys(window.metroOverridesByRoot).forEach(r => {
+      const ov = window.metroOverridesByRoot[r];
+      if (ov && ov.genderFlips) delete ov.genderFlips[v];
+    });
+  }
+  colourVertexByGender(v);
+  updateLists();
+  if (vertexList) vertexList.value = v;
+  const msg = `Vertex ${v} is now ${now === "M" ? "male" : "female"}.`;
+  if (typeof window.scheduleMetroAutoLayout === "function") window.scheduleMetroAutoLayout(msg);
+  else setAppStatus(msg);
 }
 
 function initAppListeners() {
@@ -274,7 +323,12 @@ function initAppListeners() {
   const runForceStepBtn  = getEl("runForceStep");
 
   if (addNodeBtn)       addNodeBtn.onclick = () => addNode();
-  if (clearBtn)         clearBtn.onclick = () => clearGraph(true);
+  if (clearBtn)         clearBtn.onclick = () => {
+    clearGraph(true);
+    setAppStatus("Graph cleared. Load a tree or add vertices in the visual builder.", "info");
+  };
+  const toggleGenderBtn = getEl("toggleGenderBtn");
+  if (toggleGenderBtn)  toggleGenderBtn.onclick = () => toggleVertexGender();
   if (bfsBtn)           bfsBtn.onclick = () => startAlgo("BFS");
   if (dfsBtn)           dfsBtn.onclick = () => startAlgo("DFS");
   if (nextBtn)          nextBtn.onclick = () => stepForward();
@@ -339,11 +393,29 @@ function addNode(nameOpt) {
   if (!drawingLayer) return;
 
   const name = nameOpt || nextFreeVertexLabel();
+
+  // On the metro pages a new vertex is put in a row below the drawn map, so it never lands on top of it
+  if (window.isMetroMode) {
+    let maxY = -Infinity;
+    Object.keys(nodes).forEach(n => {
+      const el = nodes[n];
+      if (!el || el.style.display === "none" || !(graph[n] && graph[n].length)) return;
+      maxY = Math.max(maxY, el.offsetTop + el.offsetHeight);
+    });
+    if (window.edgeBends) Object.keys(window.edgeBends).forEach(k => { maxY = Math.max(maxY, window.edgeBends[k].y); });
+    if (maxY > -Infinity && gridY <= maxY + 20) {
+      gridY = Math.ceil(maxY) + 50;
+      gridX = 40;
+    }
+  }
+
   let div = document.createElement("div");
   div.className = "node";
   div.textContent = name;
   div.style.left = gridX + "px";
   div.style.top = gridY + "px";
+  const genderSel = getEl("newVertexGender");
+  if (genderSel) div.dataset.gender = genderSel.value === "M" ? "M" : "F";
 
   gridX += STEP;
   if (gridX > 720) { gridX = 20; gridY += STEP; }
@@ -354,6 +426,7 @@ function addNode(nameOpt) {
   drawingLayer.appendChild(div);
   nodes[name] = div;
   if (!graph[name]) graph[name] = [];
+  colourVertexByGender(name);
   if (startNodeInp && !startNodeInp.value) startNodeInp.value = name;
   updateLists();
   updateCanvasSize(gridX, gridY);
@@ -429,6 +502,7 @@ function placeNodesGrid(names) {
     drawingLayer.appendChild(div);
     nodes[name] = div;
     if (!graph[name]) graph[name] = [];
+    colourVertexByGender(name);
   });
 
   nodeIndex = names.length;
@@ -448,7 +522,8 @@ function updateLists() {
   Object.keys(graph).sort(compareVertexLabels).forEach(v => {
     let opt = document.createElement("option");
     opt.value = v;
-    opt.textContent = v;
+    const g = appVertexGender(v);
+    opt.textContent = g ? `${g === "M" ? "*" : ""}${v} (${g === "M" ? "male" : "female"})` : v;
     vertexList.appendChild(opt);
   });
 
@@ -543,6 +618,7 @@ function makeDraggable(el) {
       document.onmouseup = null;
       window.metroDragActive = false;
       refreshZoomExtent();
+      if (typeof window.metroUpdateStats === "function") window.metroUpdateStats();
       if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
       //if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
     };
@@ -853,6 +929,7 @@ function clearGraph(clearInputs=true) {
   if (typeof updateSummaryOfChangesSection === "function") {
     updateSummaryOfChangesSection();
   }
+  if (typeof window.metroUpdateStats === "function") window.metroUpdateStats();
 }
 
 function drawEdges() {
@@ -927,6 +1004,9 @@ function drawEdges() {
       path.setAttribute("stroke-width", "2.5");
       path.setAttribute("fill", "transparent");
       path.setAttribute("stroke-linejoin", "round");
+      path.setAttribute("data-u", u);
+      path.setAttribute("data-v", v);
+      path.setAttribute("pathLength", "1");
       edgesSvg.appendChild(path);
     });
   }
@@ -1205,10 +1285,13 @@ function buildGenderedTree(parsed, sourceLabel) {
   if (typeof checkAndListOverlappingVertices === "function") checkAndListOverlappingVertices();
   if (typeof updateSummaryOfChangesSection === "function") updateSummaryOfChangesSection();
 
-  const statusP = getEl("status");
-  if (statusP) {
-    statusP.textContent = `Tree loaded from ${sourceLabel}: ${parsed.names.length} vertices, ${parsed.edges.length} edges ` +
-      `(${maleCount} male, ${parsed.names.length - maleCount} female). Run the layout to draw it.`;
+  // The live redraw draws the loaded tree straight away (the latest request replaces the one from notifyGraphChanged)
+  const loaded = `Tree loaded from ${sourceLabel}: ${parsed.names.length} vertices, ${parsed.edges.length} edges ` +
+    `(${maleCount} male, ${parsed.names.length - maleCount} female).`;
+  if (window.isMetroMode && typeof window.scheduleMetroAutoLayout === "function") {
+    window.scheduleMetroAutoLayout(loaded);
+  } else {
+    setAppStatus(loaded + " Run the layout to draw it.");
   }
 }
 

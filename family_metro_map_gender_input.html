@@ -1,312 +1,508 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Family Metro Map Visualizer</title>
 <link rel="stylesheet" href="styles.css">
 <style>
-  body { font-family: sans-serif; margin: 20px; background: #f4f7f6; }
-  
-  .top-layout {
-    display: flex;
-    gap: 20px;
-    align-items: flex-start;
-    margin-bottom: 20px;
+  :root {
+    --bg: #0b1020; --bg2: #0f172a; --panel: #141d33; --panel2: #1a2540; --line: #263354; --line2: #31416a;
+    --text: #e6ecf8; --muted: #93a1c1; --faint: #66759a;
+    --red-line: #e74c3c; --red-line2: #ff7a6b;
+    --teal: #2dd4bf; --blue: #4aa3ff; --pink: #ff4f9a; --violet: #a78bfa; --red: #ff6b6b; --amber: #fbbf24; --green: #34d399; --orange: #f59e0b;
+    --radius: 12px;
+    --mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    --sans: "Inter", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: var(--sans); color: var(--text); font-size: 14px; line-height: 1.45; min-height: 100vh;
+    background:
+      radial-gradient(1200px 600px at 85% -10%, rgba(74, 163, 255, 0.12), transparent 60%),
+      radial-gradient(900px 500px at -10% 10%, rgba(231, 76, 60, 0.09), transparent 60%),
+      var(--bg);
   }
 
-  .controls-section { flex: 1; }
-
-  #paperInfo {
-    width: 420px;
-    background: #fff;
-    border: 1px solid #ccc;
-    border-radius: 8px;
-    padding: 15px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-    font-size: 0.85em;
+  /* ---------- header ---------- */
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 18px 28px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(20, 29, 51, 0.9), rgba(11, 16, 32, 0.6));
+    position: sticky; top: 0; z-index: 20; backdrop-filter: blur(8px);
   }
-
-  #paperInfo h3 { margin-top: 0; color: #2c3e50; border-bottom: 2px solid #eee; }
-  
-  .formula-box {
-    background: #f8f9fa;
-    border-left: 4px solid #e74c3c;
-    padding: 10px;
-    margin: 10px 0;
-    font-family: 'Courier New', monospace;
+  .logo { width: 38px; height: 38px; flex: none; }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: 0.3px; font-weight: 700; }
+  header .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  header .spacer { flex: 1; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--line); color: var(--muted); font-size: 12px; white-space: nowrap;
   }
+  nav.links { display: flex; gap: 8px; margin-right: 6px; flex-wrap: wrap; }
+  nav.links a {
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px;
+    color: #ffb3a8; text-decoration: none; font-size: 12px; font-weight: 600; white-space: nowrap;
+    border: 1px solid rgba(231, 76, 60, 0.45); background: rgba(231, 76, 60, 0.08); transition: background 0.15s;
+  }
+  nav.links a:hover { background: rgba(231, 76, 60, 0.18); }
+  .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; border: 2px solid; }
+
+  /* ---------- layout ---------- */
+  .app { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 22px; padding: 22px 28px 40px; }
+  @media (max-width: 1100px) { .app { grid-template-columns: 1fr; } }
+  aside { display: flex; flex-direction: column; gap: 16px; }
+  main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+  .card {
+    background: linear-gradient(180deg, var(--panel), rgba(20, 29, 51, 0.85));
+    border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  }
+  .card > summary, .card > .head {
+    list-style: none; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px; font-weight: 650; font-size: 13px; letter-spacing: 0.6px; text-transform: uppercase; color: #cdd6ea;
+  }
+  .card > .head { cursor: default; }
+  .card > summary::-webkit-details-marker { display: none; }
+  .card > summary::after {
+    content: ""; margin-left: auto; width: 8px; height: 8px;
+    border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+    transform: rotate(45deg); transition: transform 0.2s ease; margin-top: -4px;
+  }
+  .card[open] > summary::after { transform: rotate(-135deg); margin-top: 4px; }
+  .card .ico { width: 18px; height: 18px; color: var(--red-line2); flex: none; }
+  .body { padding: 0 16px 16px; }
+  .hint { color: var(--faint); font-size: 12px; margin: 6px 0 10px; }
+  code { font-family: var(--mono); font-size: 12px; background: var(--panel2); padding: 1px 5px; border-radius: 5px; color: #ffb3a8; }
+
+  /* ---------- form controls ---------- */
+  .seg { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 3px; }
+  .seg button { background: transparent; border: 0; color: var(--muted); padding: 7px 4px; border-radius: 7px; font: 600 12.5px var(--sans); cursor: pointer; transition: all 0.15s; }
+  .seg button.on { background: var(--panel2); color: var(--text); box-shadow: inset 0 0 0 1px var(--line2); }
+  .seg button:hover:not(.on) { color: var(--text); }
+  select#mode { display: none; }
+
+  textarea, input[type=number], input[type=text], select {
+    background: var(--bg2); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    font: 13px var(--sans); padding: 7px 9px; outline: none; transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  textarea { width: 100%; resize: vertical; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; min-height: 130px; margin-top: 10px; }
+  textarea:focus, input:focus, select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(74, 163, 255, 0.18); }
+  select { cursor: pointer; }
+  input[type=file] { display: none; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .field > span { color: var(--muted); font-size: 11.5px; letter-spacing: 0.3px; }
+  .field input, .field select { width: 100%; }
+  .field.full { grid-column: 1 / -1; }
+
+  .toggle { display: flex; align-items: center; gap: 10px; color: var(--text); font-size: 13px; cursor: pointer; padding: 4px 0; }
+  .toggle input { appearance: none; width: 34px; height: 19px; border-radius: 999px; background: var(--line2); position: relative; cursor: pointer; flex: none; transition: background 0.2s; margin: 0; }
+  .toggle input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: #dfe6f5; transition: transform 0.2s; }
+  .toggle input:checked { background: var(--teal); }
+  .toggle input:checked::after { transform: translateX(15px); }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    border: 1px solid var(--line2); background: var(--panel2); color: var(--text);
+    padding: 8px 13px; border-radius: 9px; font: 600 13px var(--sans); cursor: pointer;
+    transition: transform 0.08s, background 0.15s, border-color 0.15s, box-shadow 0.15s; white-space: nowrap;
+  }
+  .btn:hover { background: #22305a; border-color: #3d5186; }
+  .btn:active { transform: translateY(1px); }
+  .btn svg { width: 15px; height: 15px; }
+  .btn.primary { background: linear-gradient(180deg, var(--red-line2), var(--red-line)); color: #fff; border-color: #c0392b; box-shadow: 0 6px 18px rgba(231, 76, 60, 0.3); }
+  .btn.primary:hover { filter: brightness(1.07); }
+  .btn.green { background: rgba(39, 174, 96, 0.14); border-color: rgba(52, 211, 153, 0.5); color: #a7f3d0; }
+  .btn.green:hover { background: rgba(39, 174, 96, 0.24); }
+  .btn.blue { background: rgba(41, 128, 185, 0.16); border-color: rgba(74, 163, 255, 0.5); color: #bfdcff; }
+  .btn.blue:hover { background: rgba(41, 128, 185, 0.26); }
+  .btn.orange { background: rgba(230, 126, 34, 0.14); border-color: rgba(245, 158, 11, 0.5); color: #ffd9a8; }
+  .btn.orange:hover { background: rgba(230, 126, 34, 0.24); }
+  .btn.teal { background: rgba(45, 212, 191, 0.12); border-color: rgba(45, 212, 191, 0.45); color: #9ff3e6; }
+  .btn.teal:hover { background: rgba(45, 212, 191, 0.2); }
+  .btn.violet { background: rgba(167, 139, 250, 0.12); border-color: rgba(167, 139, 250, 0.45); color: #d7cbff; }
+  .btn.violet:hover { background: rgba(167, 139, 250, 0.2); }
+  .btn.danger { background: rgba(255, 107, 107, 0.1); border-color: rgba(255, 107, 107, 0.4); color: #ffc2c2; }
+  .btn.danger:hover { background: rgba(255, 107, 107, 0.18); }
+  .btn.ghost { background: transparent; }
+  .btn.sm { padding: 6px 10px; font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center; }
+  .stack { display: flex; flex-direction: column; gap: 8px; }
+  .sep { height: 1px; background: var(--line); margin: 14px 0; }
+  .inline { display: flex; gap: 8px; align-items: center; }
+  .inline select { flex: 1; min-width: 0; }
+
+  /* ---------- status ---------- */
+  #status {
+    margin: 0; padding: 11px 14px 11px 40px; border-radius: 10px; position: relative;
+    background: rgba(74, 163, 255, 0.08); border: 1px solid rgba(74, 163, 255, 0.25); color: #cfe3ff;
+    font-size: 13px; min-height: 42px; font-weight: 500;
+  }
+  #status::before {
+    content: ""; position: absolute; left: 15px; top: 15px; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--blue); box-shadow: 0 0 0 4px rgba(74, 163, 255, 0.2);
+  }
+  #status.bad { background: rgba(255, 107, 107, 0.08); border-color: rgba(255, 107, 107, 0.3); color: #ffd3d3; }
+  #status.bad::before { background: var(--red); box-shadow: 0 0 0 4px rgba(255, 107, 107, 0.2); }
+  #status.good { background: rgba(52, 211, 153, 0.08); border-color: rgba(52, 211, 153, 0.3); color: #c9f7e4; }
+  #status.good::before { background: var(--green); box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.2); }
+  #status.busy::before { animation: pulse 0.9s ease-in-out infinite; }
+  @keyframes pulse { 50% { transform: scale(0.6); opacity: 0.5; } }
+
+  /* ---------- BFS layers ---------- */
+  .bfs { display: flex; align-items: baseline; gap: 10px; padding: 12px 16px; flex-wrap: wrap; }
+  .bfs strong { font-size: 12px; letter-spacing: 0.6px; text-transform: uppercase; color: #cdd6ea; white-space: nowrap; }
+  #bfsLayersDisplay { font-family: var(--mono); font-size: 12.5px; color: var(--muted); line-height: 1.9; }
+
+  /* ---------- drawing window ---------- */
+  .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .zoomgrp { display: inline-flex; align-items: center; background: var(--bg2); border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .zoomgrp button { background: transparent; border: 0; color: var(--text); width: 32px; height: 32px; cursor: pointer; font: 700 16px var(--sans); }
+  .zoomgrp button:hover { background: var(--panel2); }
+  #zoomLevel { min-width: 54px; text-align: center; font: 600 12.5px var(--mono); color: #ffb3a8; border-left: 1px solid var(--line); border-right: 1px solid var(--line); line-height: 32px; }
+  .toolbar .hint { margin: 0 0 0 auto; }
 
   #canvas {
-    position: relative;
-    width: 100%;
-    height: 520px;
-    border: 2px solid #ccc;
-    border-bottom: none;
-    background: white;
-    overflow: auto;
-    margin-top: 10px;
-    box-sizing: border-box;
+    --metro-line: #3b4a63; --metro-hl: #e67e22;
+    position: relative; width: 100%; height: 520px; overflow: auto; margin: 0;
+    background: #f7f9fc;
+    transition: background-color 0.2s;
   }
-
+  #canvas.map-dark {
+    --metro-line: #c3cee6; --metro-hl: #ffd166;
+    background: #0a0f1d;
+  }
   /* Zoom: #zoomSizer gives the scroll area the zoomed size, #zoomLayer holds the drawing and is scaled */
-  #zoomSizer {
-    position: relative;
-    overflow: hidden;
-  }
+  #zoomSizer { position: relative; overflow: hidden; }
+  #zoomLayer { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  #edges { position: absolute; top: 0; left: 0; overflow: visible; }
+  #edges path { stroke: var(--metro-line); stroke-width: 3px; stroke-linecap: round; transition: stroke-opacity 0.15s, stroke 0.15s; }
 
-  #zoomLayer {
-    position: absolute;
-    top: 0;
-    left: 0;
-    transform-origin: 0 0;
-  }
-
-  #edges {
-    position: absolute;
-    top: 0;
-    left: 0;
-    overflow: visible;
-  }
-
-  /* Resize handle on the lower side of the drawing window */
   #canvasResizeHandle {
-    width: 100%;
-    height: 16px;
-    box-sizing: border-box;
-    border: 2px solid #ccc;
-    border-top: 1px solid #ddd;
-    background: #e9ecef;
-    cursor: ns-resize;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 11px;
-    line-height: 1;
-    color: #555;
-    user-select: none;
-    touch-action: none;
+    height: 14px; display: flex; align-items: center; justify-content: center; cursor: ns-resize; user-select: none; touch-action: none;
+    border-top: 1px solid var(--line); background: var(--panel); border-radius: 0 0 var(--radius) var(--radius);
   }
+  #canvasResizeHandle::before { content: ""; width: 46px; height: 4px; border-radius: 4px; background: var(--line2); transition: background 0.15s; }
+  #canvasResizeHandle:hover::before { background: var(--red-line2); }
 
-  #canvasResizeHandle:hover { background: #dde2e6; color: #222; }
-
-  .zoom-bar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-    margin-top: 10px;
-    font-size: 13px;
+  /* vertices */
+  .node {
+    position: absolute; width: 16px !important; height: 16px !important; box-sizing: border-box;
+    border: 2px solid #5b6478 !important; border-radius: 50%; background: #8a93a8;
+    display: flex; align-items: center; justify-content: center;
+    font: 700 9px Arial, sans-serif !important; color: #fff; cursor: grab; user-select: none; z-index: 1;
+    transition: box-shadow 0.15s, opacity 0.15s;
   }
-
-  .zoom-bar button {
-    background: #4a4a4a;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    padding: 3px 9px;
-    cursor: pointer;
-    font-weight: bold;
-  }
-
-  .zoom-bar .hint { color: #7f8c8d; font-size: 12px; margin-left: 6px; }
-
+  .node:active { cursor: grabbing; }
+  .node-male { background: #3498db !important; border-color: #1b4f72 !important; color: white !important; }
+  .node-female { background: #e91e63 !important; border-color: #880e4f !important; color: white !important; }
+  .node.selected-node { box-shadow: 0 0 0 3px #ffd166, 0 0 12px rgba(255, 209, 102, 0.8); }
   /* Rotated view: vertex labels are turned back so they stay upright */
   #zoomLayer.rotated90 .node { rotate: -90deg; }
 
-  .node { position: absolute; }
-  .node {
-    width: 16px !important;
-    height: 16px !important;
-    border-width: 2px !important;
-    font-size: 9px !important;
-    font-weight: bold;
+  /* hover: the lines of a vertex light up, everything else fades */
+  #zoomLayer.hovering #edges path { stroke-opacity: 0.22; }
+  #zoomLayer.hovering #edges path.hl { stroke: var(--metro-hl); stroke-opacity: 1; stroke-width: 4.5px; }
+  #zoomLayer.hovering .node { opacity: 0.45; }
+  #zoomLayer.hovering .node.hl, #zoomLayer.hovering .node.hl-main { opacity: 1; }
+  .node.hl { box-shadow: 0 0 0 3px var(--metro-hl); }
+  .node.hl-main { box-shadow: 0 0 0 4px var(--metro-hl), 0 0 14px var(--metro-hl); z-index: 2; }
+
+  /* draw-in animation: lines are drawn and vertices pop in, generation by generation from the root */
+  #zoomLayer.animate #edges path, #edges path.grow { stroke-dasharray: 1; stroke-dashoffset: 1; animation: metroDraw 0.5s ease-out forwards; }
+  #edges path.grow { animation-duration: 0.45s; }
+  #zoomLayer.animate .node, .node.pop-in { animation: metroPop 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.4) both; }
+  @keyframes metroDraw { to { stroke-dashoffset: 0; } }
+  @keyframes metroPop { from { opacity: 0; transform: scale(0.3); } to { opacity: 1; transform: scale(1); } }
+  @media (prefers-reduced-motion: reduce) { #zoomLayer.animate *, #edges path.grow, .node.pop-in { animation: none !important; stroke-dasharray: none !important; } }
+
+  #tip {
+    position: fixed; z-index: 50; pointer-events: none; opacity: 0; transform: translateY(4px);
+    transition: opacity 0.12s, transform 0.12s;
+    background: rgba(15, 23, 42, 0.96); border: 1px solid var(--line2); border-radius: 10px;
+    padding: 9px 11px; font-size: 12.5px; box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45); min-width: 160px; max-width: 320px;
+  }
+  #tip.on { opacity: 1; transform: none; }
+  #tip b { font-size: 14px; }
+  #tip .k { color: var(--muted); }
+
+  /* ---------- statistics ---------- */
+  #statsBox { padding: 4px 16px 16px; }
+  table.stats { border-collapse: separate; border-spacing: 8px; margin: -8px; width: calc(100% + 16px); table-layout: fixed; }
+  table.stats td { padding: 0; }
+  table.stats td:nth-child(odd) { color: var(--muted); font-size: 12px; padding-left: 12px; border-left: 2px solid var(--line2); }
+  table.stats td:nth-child(even) { font: 600 14px var(--mono); color: var(--text); }
+  #statsBox em { color: var(--faint); }
+
+  /* ---------- reports ---------- */
+  .reports { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  @media (max-width: 1300px) { .reports { grid-template-columns: 1fr; } }
+  .report { padding: 14px 16px; border-left: 3px solid; }
+  .report h3 { margin: 0 0 8px; font-size: 13px; letter-spacing: 0.3px; display: flex; align-items: center; gap: 8px; }
+  .report h3 .n { margin-left: auto; font: 600 11.5px var(--mono); padding: 2px 8px; border-radius: 999px; background: var(--panel2); color: var(--muted); }
+  .report ul { margin: 0; padding-left: 18px; font-size: 12.5px; color: #c4cde2; max-height: 220px; overflow: auto; }
+  .report li { margin: 3px 0; border-radius: 4px; }
+  .report li[style*="background"] { background: rgba(251, 191, 36, 0.14) !important; }
+  .report li strong[style*="#c0392b"] { color: #ff8f8f !important; }
+  .report li strong[style*="#e67e22"] { color: #ffc27a !important; }
+  .report.r1 { border-left-color: var(--red); } .report.r1 h3 { color: #ffb3b3; }
+  .report.r2 { border-left-color: var(--amber); } .report.r2 h3 { color: #ffe08a; }
+  .report.r3 { border-left-color: var(--blue); } .report.r3 h3 { color: #bfdcff; }
+
+  /* ---------- paper ---------- */
+  #paperInfo .body { color: #c4cde2; font-size: 13px; }
+  #paperInfo strong { color: var(--text); }
+  .formula-box {
+    background: var(--bg2); border: 1px solid var(--line); border-left: 3px solid var(--red-line);
+    border-radius: 8px; padding: 8px 11px; margin: 7px 0; font: 12px/1.55 var(--mono); color: #ffc9c2;
   }
 
-  /* Node Colors */
-  .node-male {
-    background: #3498db !important;
-    border-color: #1b4f72 !important;
-    color: white !important;
-  }
-
-  .node-female {
-    background: #e91e63 !important;
-    border-color: #880e4f !important;
-    color: white !important;
-  }
-
-  .legend-dot {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    vertical-align: middle;
-    margin-right: 3px;
-  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
 </style>
 </head>
 
 <body>
 
-<div class="top-layout">
-  <div class="controls-section">
-    <h2>Family Metro Map Visualizer</h2>
-    <a href="family_metro_map.html" style="color: blue;">← Go to Family Metro Map without Gender Input</a> |
-    <a href="electric_map.html" style="color: blue;">Go to Electric Map</a>
-    <br><br>
+<header>
+  <svg class="logo" viewBox="0 0 40 40" aria-hidden="true">
+    <rect x="1" y="1" width="38" height="38" rx="9" fill="#2a1420"/>
+    <g fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M7 12h10l8 8h8" stroke="#e74c3c"/>
+      <path d="M17 12v10l-6 6" stroke="#4aa3ff"/>
+      <path d="M25 20v12" stroke="#ff4f9a"/>
+    </g>
+    <circle cx="7" cy="12" r="2.8" fill="#fff" stroke="#e74c3c" stroke-width="1.6"/>
+    <circle cx="17" cy="12" r="2.8" fill="#fff" stroke="#e74c3c" stroke-width="1.6"/>
+    <circle cx="25" cy="20" r="2.8" fill="#fff" stroke="#e74c3c" stroke-width="1.6"/>
+    <circle cx="33" cy="20" r="2.8" fill="#fff" stroke="#e74c3c" stroke-width="1.6"/>
+    <circle cx="11" cy="28" r="2.8" fill="#fff" stroke="#4aa3ff" stroke-width="1.6"/>
+    <circle cx="25" cy="32" r="2.8" fill="#fff" stroke="#ff4f9a" stroke-width="1.6"/>
+  </svg>
+  <div>
+    <h1>Family Metro Map Visualizer</h1>
+    <div class="sub">A gendered family tree drawn as a metro map, after Korst, Pronk &amp; van Wijk (2020)</div>
+  </div>
+  <div class="spacer"></div>
+  <nav class="links">
+    <a href="family_metro_map.html">Go to Family Metro Map without Gender Input</a>
+    <a href="electric_map.html">Go to Electric Map</a>
+  </nav>
+  <span class="chip"><span class="dot" style="background:#3498db;border-color:#1b4f72"></span>Male: diagonal</span>
+  <span class="chip"><span class="dot" style="background:#e91e63;border-color:#880e4f"></span>Female: horizontal / vertical</span>
+</header>
 
-    <select id="mode" onchange="switchMode()">
-      <option value="visual">Visual Builder</option>
-      <option value="list">Adjacency List</option>
-      <option value="matrix">Adjacency Matrix</option>
-    </select>
-
-    <div id="visualMode">
-      <button id="addNodeBtn">Add Vertex</button>
-      <p>Click two vertices to create an edge (construct an acyclic tree).</p>
-    </div>
-
-    <div id="listMode" style="display:none">
-      <p style="margin: 4px 0; font-size: 12px; color: #555;">Tree only. Mark male vertices with <strong>*</strong> wherever they appear (e.g. <code>*A</code>); unmarked vertices are female.</p>
-      <textarea id="listInput" rows="5" cols="30" placeholder="*A:B,*C&#10;B:*A,D&#10;*C:*A&#10;D:B"></textarea><br>
-      <button id="showListGraphBtn">Show Graph</button>
-      <input type="file" id="importListFile" accept=".txt">
-      <button id="importListBtn">Import List</button>
-    </div>
-
-    <div id="matrixMode" style="display:none">
-      <p style="margin: 4px 0; font-size: 12px; color: #555;">Tree only. Rows are vertices A, B, C, ... in order; put <strong>*</strong> at the beginning of a row to make that vertex male.</p>
-      <textarea id="matrixInput" rows="5" cols="30" placeholder="*0,1,1&#10;1,0,0&#10;*1,0,0"></textarea><br>
-      <button id="showMatrixGraphBtn">Show Graph</button>
-      <input type="file" id="importMatrixFile" accept=".txt">
-      <button id="importMatrixBtn">Import Matrix</button>
-    </div>
-
-    <button id="clearBtn">Clear Graph</button>
-    <button id="exportListBtn">Export List</button>
-    <button id="exportMatrixBtn">Export Matrix</button>
-
-    <br>
-    Root Node:
-    <input id="startNode" style="width:50px" placeholder="A" />
-
-    <div style="background: #eef2f3; padding: 10px; border-radius: 5px; margin-top: 10px; border: 1px solid #ccc;">
-        <strong>Family Metro Map Layout (Korst et al., 2020):</strong>
-        <br><br>
-        <label>Shrinking Factor (&alpha;): 
-          <input type="number" id="metroAlpha" value="0.75" step="0.05" min="0.1" max="1.0" style="width:60px">
-        </label>
-        <button id="runMetroBtn" onclick="runFamilyMetroMapLayout(parseFloat(document.getElementById('metroAlpha').value))" style="background:#e74c3c; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer;">
-          Run Full Metro Layout
-        </button>
-        <button id="stepMetroBtn" onclick="stepBFSMove(parseFloat(document.getElementById('metroAlpha').value))" style="background:#27ae60; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
-          Step by Step BFS Draw
-        </button>
-        <button id="fixOverlapsBtn" onclick="fixMetroOverlaps(parseFloat(document.getElementById('metroAlpha').value))" style="background:#2980b9; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
-          Fix Vertex Overlaps
-        </button>
-        <button id="fixEdgeOverlapsBtn" onclick="fixMetroEdgeOverlaps(parseFloat(document.getElementById('metroAlpha').value))" style="background:#e67e22; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
-          Fix Edge Overlaps
-        </button>
-        <button id="randomizeGendersBtn" onclick="randomizeGendersAndRedraw(parseFloat(document.getElementById('metroAlpha').value))" style="background:#4a4a4a; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
-          Randomize Genders
-        </button>
-        <button id="saveDrawingBtn" onclick="saveDrawingAsJPG()" style="background:#8e44ad; color:white; font-weight:bold; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; margin-left: 6px;">
-          Save Drawing
-        </button>
-        <div style="margin-top: 8px; font-size: 0.85em;">
-          <strong>Legend:</strong>
-          <span class="legend-dot" style="background: #3498db; margin-left: 6px;"></span> Male (Diagonal)
-          <span class="legend-dot" style="background: #e91e63; margin-left: 10px;"></span> Female (Orthogonal)
+<div class="app">
+  <aside>
+    <!-- ---------------- input ---------------- -->
+    <details class="card" open>
+      <summary>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h7"/></svg>
+        Input
+      </summary>
+      <div class="body">
+        <div class="seg" id="modeSeg">
+          <button data-mode="list" class="on">Adjacency list</button>
+          <button data-mode="matrix">Matrix</button>
+          <button data-mode="visual">Visual builder</button>
         </div>
-        <p id="status" style="margin-top: 5px; font-weight: bold;"></p>
+        <select id="mode" onchange="switchMode()">
+          <option value="list">Adjacency List</option>
+          <option value="matrix">Adjacency Matrix</option>
+          <option value="visual">Visual Builder</option>
+        </select>
+
+        <div id="listMode">
+          <textarea id="listInput" rows="7" spellcheck="false" placeholder="*A:B,*C&#10;B:*A,D&#10;*C:*A&#10;D:B"></textarea>
+          <div class="hint">Tree only. One line per vertex; mark male vertices with <code>*</code> wherever they appear (e.g. <code>*A</code>); unmarked vertices are female.</div>
+          <div class="row">
+            <button id="showListGraphBtn" class="btn primary"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>Show graph</button>
+            <input type="file" id="importListFile" accept=".txt">
+            <button id="importListBtn" class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>Import list</button>
+          </div>
+        </div>
+
+        <div id="matrixMode" style="display:none">
+          <textarea id="matrixInput" rows="7" spellcheck="false" placeholder="*0,1,1&#10;1,0,0&#10;*1,0,0"></textarea>
+          <div class="hint">Tree only. Rows are vertices A, B, C, … in order; a <code>*</code> at the beginning of a row makes that vertex male.</div>
+          <div class="row">
+            <button id="showMatrixGraphBtn" class="btn primary"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>Show graph</button>
+            <input type="file" id="importMatrixFile" accept=".txt">
+            <button id="importMatrixBtn" class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>Import matrix</button>
+          </div>
+        </div>
+
+        <div id="visualMode" style="display:none">
+          <div class="row" style="margin-top:12px">
+            <button id="addNodeBtn" class="btn teal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add vertex</button>
+            <span class="inline" style="color:var(--muted)">as
+              <select id="newVertexGender">
+                <option value="F">female</option>
+                <option value="M">male</option>
+              </select>
+            </span>
+          </div>
+          <div class="hint">Click two vertices to create an edge (construct an acyclic tree). New vertices appear below the map; as soon as everything is one tree the map is redrawn.</div>
+        </div>
+
+        <div class="sep"></div>
+        <div class="row" style="margin-top:0">
+          <button id="exportListBtn" class="btn sm ghost">Export list</button>
+          <button id="exportMatrixBtn" class="btn sm ghost">Export matrix</button>
+          <button id="clearBtn" class="btn sm danger" style="margin-left:auto">Clear graph</button>
+        </div>
+      </div>
+    </details>
+
+    <!-- ---------------- layout ---------------- -->
+    <details class="card" open>
+      <summary>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+        Family Metro Map layout
+      </summary>
+      <div class="body">
+        <div class="grid2">
+          <label class="field"><span>Root node</span><input id="startNode" type="text" placeholder="A"></label>
+          <label class="field"><span>Shrinking factor (&alpha;)</span><input type="number" id="metroAlpha" value="0.75" step="0.05" min="0.1" max="1.0"></label>
+          <label class="field full"><span>Map style</span>
+            <select id="mapStyle">
+              <option value="light">Light paper</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+        </div>
+        <div class="stack" style="margin-top:12px">
+          <label class="toggle" title="Redraw the map automatically after every change of the graph, the root or α"><input type="checkbox" id="autoLayout" checked> Live redraw after every change</label>
+          <label class="toggle"><input type="checkbox" id="animateDrawing" checked> Animate the drawing</label>
+        </div>
+        <div class="row" style="margin-top:14px">
+          <button id="runMetroBtn" class="btn primary" onclick="runFamilyMetroMapLayout(parseFloat(document.getElementById('metroAlpha').value))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/></svg>Run full metro layout</button>
+          <button id="stepMetroBtn" class="btn green" onclick="stepBFSMove(parseFloat(document.getElementById('metroAlpha').value))">Step by step BFS draw</button>
+        </div>
+        <div class="row">
+          <button id="fixOverlapsBtn" class="btn blue" onclick="fixMetroOverlaps(parseFloat(document.getElementById('metroAlpha').value))">Fix vertex overlaps</button>
+          <button id="fixEdgeOverlapsBtn" class="btn orange" onclick="fixMetroEdgeOverlaps(parseFloat(document.getElementById('metroAlpha').value))">Fix edge overlaps</button>
+        </div>
+        <div class="row">
+          <button id="randomizeGendersBtn" class="btn teal" onclick="randomizeGendersAndRedraw(parseFloat(document.getElementById('metroAlpha').value))">Randomize genders</button>
+          <button id="saveDrawingBtn" class="btn violet" onclick="saveDrawingAsJPG()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>Save drawing</button>
+        </div>
+      </div>
+    </details>
+
+    <!-- ---------------- edit ---------------- -->
+    <details class="card">
+      <summary>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>
+        Vertex &amp; edge management
+      </summary>
+      <div class="body">
+        <div class="field"><span>Vertex</span>
+          <div class="inline"><select id="vertexList"></select></div>
+        </div>
+        <div class="row">
+          <button id="toggleGenderBtn" class="btn sm teal">Toggle gender</button>
+          <button id="removeVertexBtn" class="btn sm danger">Remove vertex</button>
+        </div>
+        <div class="sep"></div>
+        <div class="field"><span>Edge</span>
+          <div class="inline"><select id="edgeList"></select></div>
+        </div>
+        <div class="row">
+          <button id="removeEdgeBtn" class="btn sm danger">Remove edge</button>
+        </div>
+      </div>
+    </details>
+  </aside>
+
+  <main>
+    <p id="status">Load a tree or add vertices in the visual builder.</p>
+
+    <!-- BFS Traversal (Layer by Layer) visible directly above the drawing grid -->
+    <section class="card bfs" id="bfsLayerContainer">
+      <strong>BFS traversal (layer by layer)</strong>
+      <span id="bfsLayersDisplay">[]</span>
+    </section>
+
+    <section class="card">
+      <div class="toolbar">
+        <div class="zoomgrp">
+          <button id="zoomOutBtn" onclick="zoomMetroBy(1 / 1.2)" title="Zoom out">−</button>
+          <span id="zoomLevel">100%</span>
+          <button id="zoomInBtn" onclick="zoomMetroBy(1.2)" title="Zoom in">+</button>
+        </div>
+        <button id="zoomResetBtn" class="btn sm ghost" onclick="setMetroZoom(1)" title="Back to 100%">Reset</button>
+        <button id="fitBtn" class="btn sm ghost" title="Zoom so the whole map fits the window">Fit</button>
+        <button id="rotateViewBtn" class="btn sm ghost" onclick="toggleMetroRotation()" title="Rotate the view by 90° (the drawing itself is not changed)">⟳ Rotate 90°</button>
+        <span class="hint">Hover a vertex to trace its lines · drag vertices · pinch or Ctrl + scroll to zoom · drag the bar below to resize</span>
+      </div>
+      <div id="canvas">
+        <div id="zoomSizer">
+          <div id="zoomLayer">
+            <svg id="edges"></svg>
+          </div>
+        </div>
+      </div>
+      <div id="canvasResizeHandle" title="Drag up or down to resize the drawing window (double-click to fit the map)"></div>
+    </section>
+
+    <section class="card">
+      <div class="head">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+        Map statistics
+      </div>
+      <div id="statsBox"><em>No drawing yet.</em></div>
+    </section>
+
+    <div class="reports">
+      <section class="card report r1" id="overlapSection">
+        <h3>Overlapping vertices <span class="n" id="n1">0</span></h3>
+        <ul id="overlapList"><li style="color: #7f8c8d;">None (Layout has no overlapping vertices)</li></ul>
+      </section>
+      <section class="card report r2" id="edgeOverlapSection">
+        <h3>Overlapping / touching edges <span class="n" id="n2">0</span></h3>
+        <ul id="edgeOverlapList"><li style="color: #7f8c8d;">None (No edge collisions detected)</li></ul>
+      </section>
+      <section class="card report r3" id="summarySection">
+        <h3>Summary of changes <span class="n" id="n3">0</span></h3>
+        <ul id="summaryList"><li style="color: #7f8c8d;">No automated adjustments applied.</li></ul>
+      </section>
     </div>
 
-    <div style="background: #f9f9f9; padding: 10px; border-radius: 5px; margin-top: 10px; border: 1px solid #ddd;">
-        <strong>Vertex Management:</strong>
-        <select id="vertexList"></select>
-        <button id="removeVertexBtn">Remove Vertex</button>
-        <br><br>
-        <strong>Edge Management:</strong>
-        <select id="edgeList"></select> 
-        <button id="removeEdgeBtn">Remove Edge</button>
-    </div>
-  </div>
-
-  <div id="paperInfo">
-    <h3>Korst, Pronk &amp; van Wijk (2020)</h3>
-    <p>A schematic tree layout inspired by the London Underground map:</p>
-    
-    <strong>1. Tree Verification</strong>
-    <p>The input graph must be an <strong>undirected tree</strong> (|E| = |V| - 1 and connected) with no cycles.</p>
-
-    <strong>2. Gender &amp; Line Angles</strong>
-    <div class="formula-box">
-      Female: Horizontal / Vertical (even &times; &pi;/4)<br>
-      Male: Diagonal (odd &times; &pi;/4)
-    </div>
-    <p>Transitions between same-gender nodes are straight; different genders use 45° bends.</p>
-
-    <strong>3. Generation Scaling</strong>
-    <div class="formula-box">
-      Distance = d &times; &alpha;<sup>g</sup>
-    </div>
-    <p>Successive generations <em>g</em> shrink by factor &alpha; &le; 1 to prevent subtree overlap.</p>
-  </div>
+    <details class="card" id="paperInfo">
+      <summary>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
+        Korst, Pronk &amp; van Wijk (2020)
+      </summary>
+      <div class="body">
+        <p>A schematic tree layout inspired by the London Underground map:</p>
+        <strong>1. Tree Verification</strong>
+        <p>The input graph must be an <strong>undirected tree</strong> (|E| = |V| - 1 and connected) with no cycles.</p>
+        <strong>2. Gender &amp; Line Angles</strong>
+        <div class="formula-box">Female: Horizontal / Vertical (even &times; &pi;/4)<br>Male: Diagonal (odd &times; &pi;/4)</div>
+        <p>Transitions between same-gender nodes are straight; different genders use 45° bends.</p>
+        <strong>3. Generation Scaling</strong>
+        <div class="formula-box">Distance = d &times; &alpha;<sup>g</sup></div>
+        <p style="margin-bottom:0">Successive generations <em>g</em> shrink by factor &alpha; &le; 1 to prevent subtree overlap.</p>
+      </div>
+    </details>
+  </main>
 </div>
 
-<!-- BFS Traversal (Layer by Layer) visible directly above the drawing grid -->
-<div id="bfsLayerContainer" style="margin-top: 15px; margin-bottom: 5px; padding: 10px 14px; background: #ffffff; border: 1px solid #b0bec5; border-left: 5px solid #0288d1; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
-  <strong style="color: #0277bd; font-size: 13px;">BFS Traversal (Layer by Layer):</strong>
-  <span id="bfsLayersDisplay" style="margin-left: 8px; font-family: monospace; font-size: 13px; color: #263238; font-weight: bold;">[]</span>
-</div>
-
-<div class="zoom-bar">
-  <strong>Zoom:</strong>
-  <button id="zoomOutBtn" onclick="zoomMetroBy(1 / 1.2)" title="Zoom out">−</button>
-  <span id="zoomLevel" style="min-width: 44px; text-align: center; font-weight: bold;">100%</span>
-  <button id="zoomInBtn" onclick="zoomMetroBy(1.2)" title="Zoom in">+</button>
-  <button id="zoomResetBtn" onclick="setMetroZoom(1)" title="Back to 100%">Reset</button>
-  <button id="rotateViewBtn" onclick="toggleMetroRotation()" title="Rotate the view by 90° (the drawing itself is not changed)">⟳ Rotate 90°</button>
-  <span class="hint">Pinch with two fingers on the touchpad (or Ctrl + scroll) to zoom. Drag the bar under the drawing to resize it.</span>
-</div>
-
-<div id="canvas">
-  <div id="zoomSizer">
-    <div id="zoomLayer">
-      <svg id="edges"></svg>
-    </div>
-  </div>
-</div>
-<div id="canvasResizeHandle" title="Drag up or down to resize the drawing window (double-click to reset)">▲▼</div>
-
-<div id="overlapSection" style="margin-top: 20px; padding: 12px; border: 1px solid #e74c3c; border-radius: 5px; background: #fff5f5;">
-  <h3 style="margin: 0 0 8px 0; font-size: 14px; color: #c0392b;">Overlapping Vertices</h3>
-  <ul id="overlapList" style="margin: 0; padding-left: 20px; font-size: 13px; color: #333;">
-    <li style="color: #7f8c8d;">None (Layout has no overlapping vertices)</li>
-  </ul>
-</div>
-
-<div id="edgeOverlapSection" style="margin-top: 15px; padding: 12px; border: 1px solid #e67e22; border-radius: 5px; background: #fffaf0;">
-  <h3 style="margin: 0 0 8px 0; font-size: 14px; color: #d35400;">Overlapping / Touching Edges</h3>
-  <ul id="edgeOverlapList" style="margin: 0; padding-left: 20px; font-size: 13px; color: #333;">
-    <li style="color: #7f8c8d;">None (No edge collisions detected)</li>
-  </ul>
-</div>
-
-<div id="summarySection" style="margin-top: 15px; padding: 12px; border: 1px solid #2980b9; border-radius: 5px; background: #ebf5fb;">
-  <h3 style="margin: 0 0 8px 0; font-size: 14px; color: #1b4f72;">Summary of Changes</h3>
-  <ul id="summaryList" style="margin: 0; padding-left: 20px; font-size: 13px; color: #2c3e50;">
-    <li style="color: #7f8c8d;">No automated adjustments applied.</li>
-  </ul>
-</div>
+<div id="tip"></div>
 
 <script src="app_gender.js"></script>
 <script src="family_metro_map.js"></script>
 <script>
   window.isMetroMode = true;
   window.onload = function() {
-    if(typeof switchMode === 'function') switchMode();
+    if (typeof switchMode === 'function') switchMode();
+    // a sample tree, so the page opens with a map to look at
+    if (typeof metroLoadSampleTree === 'function') metroLoadSampleTree("*A:B,*C,D\nB:*A,*E,F,G\n*C:*A,H,*I\nD:*A,*J\n*E:B,K,*L\nF:B\nG:B,*M\nH:*C\n*I:*C,N,*O\n*J:D,P\nK:*E\n*L:*E\n*M:G,Q\nN:*I\n*O:*I,R\nP:*J,*S\nQ:*M\nR:*O,T\n*S:P\nT:R");
   };
 </script>
 
